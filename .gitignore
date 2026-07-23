@@ -1,0 +1,34 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+
+# Type checking and test caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+
+# Environment files
+.env
+.envrc
+
+# Raw corpus and generated data
+data/raw/*
+data/processed/*
+data/output/*
+
+# Local model files
+models/
+*.safetensors
+*.bin
