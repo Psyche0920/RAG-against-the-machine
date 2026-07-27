@@ -21,7 +21,7 @@ clean:
 fclean:
 	rm -rf .venv
 	rm -rf data/processed/*
-	rm -rf dta/output/*
+	rm -rf data/output/*
 
 lint:
 	uv run flake8 src
