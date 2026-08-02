@@ -1,6 +1,6 @@
 """Application entry point for the RAG command-line interface."""
 
-import fire  # type: ignore[import-untyped]
+import fire
 
 from src.cli import RagCLI
 

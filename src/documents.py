@@ -19,11 +19,11 @@ SUPPORTED_SUFFIXES: Final[frozenset[str]] = frozenset(
 
 
 def is_supported_file(file_path: Path) -> bool:
-    """Check whether a filecan be loaded into the text corpus.
-    
+    """Check whether a file can be loaded into the text corpus.
+
     Args:
         file_path: Path to the candidate file.
-    
+
     Returns:
         True when the file has a supported text-file extension.
     """
@@ -46,7 +46,7 @@ def make_project_relative_path(file_path: Path) -> str:
 
     Returns:
         A project-relative path using forward slashes.
-    
+
     Raises:
         ValueError: If the file is outside the current project directory.
     """
@@ -69,7 +69,7 @@ def load_document(file_path: str | Path) -> Document:
 
     Args:
         file_path: Path to the document.
-    
+
     Returns:
         A Document containing the exact project-relative path and text.
 
@@ -109,7 +109,7 @@ def find_document_paths(
         directory_path: str | Path,
 ) -> list[Path]:
     """Find supported files recursively in a corpus directory.
-    
+
     Args:
         directory_path: Root directory of the source corpus.
 
@@ -132,13 +132,15 @@ def find_document_paths(
             f"Expected a corpus directory, got: {directory}"
         )
 
-    # rglob("*") recursively visits entries in this directory and its subdirectories.
+    # rglob("*") recursively visits entries in this directory and its
+    # subdirectories.
     document_paths = [
         path
         for path in directory.rglob("*")
         if is_supported_file(path)
     ]
     return sorted(document_paths)
+
 
 def load_documents(
         directory_path: str | Path,
@@ -152,7 +154,7 @@ def load_documents(
 
     Returns:
         Documents sorted by their file paths.
-    
+
     Raises:
         FileNotFoundError: If the directory does not exist.
         NotADirectoryError: If the path is not a directory.
@@ -161,8 +163,9 @@ def load_documents(
     """
     document_paths = find_document_paths(directory_path)
 
-    # Iterable[Path] says that progress can yield Path objects; it is not a list.
-    # tqdm creates the wrapper here, but advances only when it is iterated below.
+    # Iterable[Path] says progress can yield Path objects; it is not a list.
+    # tqdm creates the wrapper here, but advances only when it is iterated
+    # below.
     progress: Iterable[Path] = tqdm(
         document_paths,
         desc="Loading documents",
@@ -170,7 +173,8 @@ def load_documents(
         disable=not show_progress,
     )
 
-    # Load files one at a time; the progress bar advances during this iteration.
+    # Load files one at a time; the progress bar advances during this
+    # iteration.
     documents = [
         load_document(path)
         for path in progress
