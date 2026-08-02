@@ -16,3 +16,11 @@ dev = [
     "mypy>=2.3.0",
     "pytest>=9.1.1",
 ]
+
+# Python Fire does not publish type information, and types-tqdm is not a
+# runtime dependency of this project. Ignore missing declarations only at
+# these third-party boundaries; our own src package is still checked with
+# every rule enabled by `mypy --strict`.
+[[tool.mypy.overrides]]
+module = ["fire", "rank_bm25", "tqdm", "tqdm.*"]
+ignore_missing_imports = true

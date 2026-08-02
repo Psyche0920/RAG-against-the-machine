@@ -331,7 +331,7 @@ def chunk_python_code(
 
     try:
         module = ast.parse(text)
-        print(ast.dump(module, indent=4))
+        # print(ast.dump(module, indent=4))
     except SyntaxError:
         return _split_fixed_size(text, document.file_path, max_chunk_size)
 
