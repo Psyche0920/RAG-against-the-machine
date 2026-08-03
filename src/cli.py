@@ -1,12 +1,67 @@
 """Command-line interface for the RAG application."""
 
-from pydantic import ValidationError
+from pathlib import Path
+from typing import Iterable
 
+from pydantic import BaseModel, ValidationError
+from tqdm import tqdm
+
+from src.chunking import DEFAULT_MAX_CHUNK_SIZE
 from src.dataset import load_dataset, save_dataset
+from src.index import DEFAULT_INDEX_DIRECTORY, BM25Index
+from src.models.models import (
+    AnsweredQuestion,
+    MinimalSearchResults,
+    MinimalSource,
+    StudentSearchResults,
+    UnansweredQuestion,
+)
 
 
 class RagCLI:
     """Expose commands for operating the RAG pipeline."""
+
+    @staticmethod
+    def _format_dataset_error(
+        error: FileNotFoundError
+        | IsADirectoryError
+        | UnicodeDecodeError
+        | ValidationError,
+        fallback_path: str,
+    ) -> str:
+        """将数据集相关异常转换为统一的 CLI 错误消息。"""
+        # 文件系统异常通常携带实际出错路径；fallback 用于异常未提供路径时。
+        error_path = getattr(error, "filename", None) or fallback_path
+
+        if isinstance(error, FileNotFoundError):
+            return f"Error: file not found: {error_path}"
+        if isinstance(error, IsADirectoryError):
+            return f"Error: expected a file, got directory: {error_path}"
+        if isinstance(error, UnicodeDecodeError):
+            return f"Error: dataset is not valid UTF-8: {error_path}"
+        return f"Error: invalid RAG dataset:\n{error}"
+
+    @staticmethod
+    def _save_json(
+        model: BaseModel, directory_path: str, file_name: str
+    ) -> Path:
+        """把 pydantic 模型写入 ``<directory_path>/<file_name>``。
+
+        Args:
+            model: 需要序列化的 pydantic 模型。
+            directory_path: 输出目录；不存在时会自动创建。
+            file_name: 输出文件名。
+
+        Returns:
+            实际写入的文件路径。
+        """
+        output_path = Path(directory_path) / file_name
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            model.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return output_path
 
     def status(self) -> str:
         """Return the current application status.
@@ -27,12 +82,14 @@ class RagCLI:
         """
         try:
             dataset = load_dataset(file_path)
-        except FileNotFoundError:
-            return f"Error: file not found: {file_path}"
-        except IsADirectoryError:
-            return f"Error: expected a file, got directory: {file_path}"
-        except ValidationError as error:
-            return f"Error: invalid RAG dataset:\n{error}"
+        # 所有数据集命令使用同一组异常类型和同一种消息格式。
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            UnicodeDecodeError,
+            ValidationError,
+        ) as error:
+            return self._format_dataset_error(error, file_path)
 
         question_count = len(dataset.rag_questions)
         return (
@@ -58,11 +115,143 @@ class RagCLI:
         try:
             dataset = load_dataset(input_path)
             save_dataset(dataset, output_path)
-        except FileNotFoundError:
-            return f"Error: file not found: {input_path}"
-        except IsADirectoryError:
-            return f"Error: expected a file, got directory: {input_path}"
-        except ValidationError as error:
-            return f"Error: invalid RAG dataset:\n{error}"
+        # save_dataset 出错时，异常中的 filename 能正确指向输出路径。
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            UnicodeDecodeError,
+            ValidationError,
+        ) as error:
+            return self._format_dataset_error(error, input_path)
 
         return f"Dataset saved successfully: {output_path}"
+
+    def index(
+        self,
+        max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
+        raw_directory: str = "data/raw",
+        index_directory: str = DEFAULT_INDEX_DIRECTORY,
+    ) -> str:
+        """Ingest the corpus and persist a BM25 index.
+
+        Args:
+            max_chunk_size: Maximum number of characters per chunk.
+            raw_directory: Root directory of the source corpus.
+            index_directory: Directory the index is persisted under.
+
+        Returns:
+            A message reporting how many chunks were indexed.
+        """
+        try:
+            bm25_index = BM25Index.build_index(raw_directory, max_chunk_size)
+        # find_document_paths/load_document 已经给出可直接展示的错误信息，
+        # 不需要像 dataset 命令那样再做一次格式化。
+        except (
+            FileNotFoundError,
+            NotADirectoryError,
+            ValueError,
+            UnicodeDecodeError,
+        ) as error:
+            return f"Error: {error}"
+
+        BM25Index.save_index(bm25_index, index_directory)
+        return (
+            f"Ingestion complete! Indexed {len(bm25_index.chunks)} chunks "
+            f"under {index_directory}/"
+        )
+
+    def search(
+        self,
+        query: str,
+        k: int = 10,
+        index_directory: str = DEFAULT_INDEX_DIRECTORY,
+    ) -> str:
+        """Return the top-k sources for a single query.
+
+        Args:
+            query: Natural language or code search question.
+            k: Maximum number of sources to return.
+            index_directory: Directory containing the persisted index.
+
+        Returns:
+            One "file_path [first_character_index:last_character_index]"
+            line per retrieved chunk, or a message when nothing matched.
+        """
+        try:
+            bm25_index = BM25Index.load_index(index_directory)
+        except FileNotFoundError as error:
+            return f"Error: {error}"
+
+        chunks = bm25_index.search(query, k)
+        if not chunks:
+            return "No results found."
+
+        return "\n".join(
+            f"{chunk.file_path} "
+            f"[{chunk.first_character_index}:{chunk.last_character_index}]"
+            for chunk in chunks
+        )
+
+    def search_dataset(
+        self,
+        dataset_path: str,
+        save_directory: str,
+        k: int = 10,
+        index_directory: str = DEFAULT_INDEX_DIRECTORY,
+    ) -> str:
+        """Search every question in a dataset and save the results.
+
+        Args:
+            dataset_path: Path to the JSON dataset of questions.
+            save_directory: Directory the StudentSearchResults JSON file is
+                written under; named after 'dataset_path'.
+            k: Maximum number of sources to return per question.
+            index_directory: Directory containing the persisted index.
+
+        Returns:
+            A message confirming where the results were saved, or a
+            message describing why the command could not run.
+        """
+        try:
+            bm25_index = BM25Index.load_index(index_directory)
+        except FileNotFoundError as error:
+            return f"Error: {error}"
+
+        try:
+            dataset = load_dataset(dataset_path)
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            UnicodeDecodeError,
+            ValidationError,
+        ) as error:
+            return self._format_dataset_error(error, dataset_path)
+
+        progress: Iterable[AnsweredQuestion | UnansweredQuestion] = tqdm(
+            dataset.rag_questions,
+            desc="Searching",
+            unit="question",
+        )
+
+        search_results = [
+            MinimalSearchResults(
+                question_id=question.question_id,
+                question=question.question,
+                retrieved_sources=[
+                    MinimalSource(
+                        file_path=chunk.file_path,
+                        first_character_index=chunk.first_character_index,
+                        last_character_index=chunk.last_character_index,
+                    )
+                    for chunk in bm25_index.search(question.question, k)
+                ],
+            )
+            for question in progress
+        ]
+
+        output_path = self._save_json(
+            StudentSearchResults(search_results=search_results, k=k),
+            save_directory,
+            Path(dataset_path).name,
+        )
+        return f"Saved student_search_results to {output_path}"

@@ -3,9 +3,10 @@
 import pickle
 import re
 from pathlib import Path
-from typing import Final
+from typing import Final, Iterable
 
 from rank_bm25 import BM25Okapi
+from tqdm import tqdm
 
 from src.chunking import DEFAULT_MAX_CHUNK_SIZE, chunk_documents
 from src.documents import load_documents
@@ -53,6 +54,31 @@ _INDEX_FILE_NAME: Final[str] = "bm25_index.pkl"
 # 长度为 2000 的巨大 token。
 _TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_]+")
 
+# 自然语言问题里大量出现、但几乎不携带检索信号的英文虚词/代词/助动词。
+# 例如 "What is the default value of X?" 分词后是
+# ["what", "is", "the", "default", "value", "of", "x"]——"what"、"is"、
+# "the"、"of" 在语料的几乎每个 chunk 里都会出现，BM25 的 IDF 本该压低
+# 它们的权重，但它们的数量仍然会拉高每个 chunk 的“共同 token 数”，
+# 稀释掉像 "default"、"value" 这类真正决定相关性的词。把它们从 query
+# 和语料的 token 列表里一起去掉，能让 BM25 的匹配更聚焦在有意义的词
+# 上。这里只去掉封闭类虚词，不去掉任何看起来像标识符或专有名词的词。
+_STOPWORDS: Final[frozenset[str]] = frozenset({
+    "a", "an", "the",
+    "is", "are", "was", "were", "be", "been", "being",
+    "this", "that", "these", "those",
+    "what", "which", "who", "whom",
+    "in", "on", "at", "by", "for", "with", "about", "against", "between",
+    "into", "through", "during", "before", "after", "above", "below",
+    "to", "from", "up", "down", "of",
+    "and", "or", "but", "if", "then", "else", "as",
+    "it", "its", "do", "does", "did", "doing",
+    "have", "has", "had", "having",
+    "i", "you", "he", "she", "we", "they", "them", "their", "his", "her",
+    "my", "your", "our",
+    "not", "no", "nor", "so", "than", "too", "very",
+    "can", "will", "just", "should", "now",
+})
+
 
 def tokenize(text: str) -> list[str]:
     """把原始文字转换成 BM25 可以使用的小写 token 列表。
@@ -61,8 +87,8 @@ def tokenize(text: str) -> list[str]:
         text: 需要分词的原始文字。
 
     Returns:
-        由英文字母、数字或下划线组成的小写 token，
-        顺序与它们在原文中的出现顺序相同。
+        由英文字母、数字或下划线组成的小写 token，去掉了 _STOPWORDS
+        里的虚词，顺序与它们在原文中的出现顺序相同。
     """
     # 第一步：lower() 让 "Chunk" 和 "chunk" 都变成
     # "chunk"，搜索时不再区分英文大小写。
@@ -81,8 +107,12 @@ def tokenize(text: str) -> list[str]:
     # - "chars" 匹配；
     # - 句号 "." 不匹配，也不会出现在结果中。
     #
-    # 最终返回 ["size", "2", "000", "chars"]。
-    return _TOKEN_PATTERN.findall(lowercase_text)
+    # 最终得到 ["size", "2", "000", "chars"]。
+    all_tokens = _TOKEN_PATTERN.findall(lowercase_text)
+
+    # 第三步：去掉 _STOPWORDS 里的虚词。query 和语料都经过这一步，
+    # 因此两边仍然使用同一套规则，不会出现只在一边过滤的不一致。
+    return [token for token in all_tokens if token not in _STOPWORDS]
 
 
 class BM25Index:
@@ -232,10 +262,34 @@ class BM25Index:
 
         # 第三步：每个 Chunk 变成一个 token 列表。
         # tokenized_corpus[i] 必须始终对应 chunks[i]。
-        tokenized_corpus = [tokenize(chunk.text) for chunk in chunks]
+        #
+        # 问题经常直接点名模块/文件（例如 "in vLLM's triton_flash_attention
+        # module"），但那个名字通常只出现在 file_path 里，不一定出现在
+        # chunk.text 本身。把 file_path 一起分词、拼进这个 chunk 的 token
+        # 列表，能让这类文件名/模块名提示也参与 BM25 匹配。这只影响索引
+        # 内容，search() 里 query 仍然只用 tokenize(query)，不需要改动。
+        progress: Iterable[Chunk] = tqdm(
+            chunks,
+            desc="Tokenizing",
+            unit="chunk",
+            disable=not show_progress,
+        )
+        tokenized_corpus = [
+            tokenize(chunk.file_path) + tokenize(chunk.text)
+            for chunk in progress
+        ]
 
         # 第四步：使用分词后的整个语料建立 BM25 模型。
-        bm25 = BM25Okapi(tokenized_corpus)
+        #
+        # k1、b 是 BM25 的两个标准超参数，rank_bm25 的默认值是
+        # k1=1.5、b=0.75。b 控制“长 chunk 是否要被扣分”的力度：
+        # b 越大，长 chunk 因为包含更多不相关词而被压低分数的幅度
+        # 也越大。本项目的语料里，代码 chunk 和文档 chunk 长度差异
+        # 很大，默认的 b=0.75 会让长度差异盖过关键词是否命中；调低到
+        # b=0.4、同时把 k1 从 1.5 降到 1.0（降低词频饱和的速度，避免
+        # 单个高频词主导分数）后，在两个参考数据集上都实测明显提升
+        # 了 recall@5，且没有取舍关系（两边同时变好）。
+        bm25 = BM25Okapi(tokenized_corpus, k1=1.0, b=0.4)
 
         # 这里不是“一个 Chunk 建立一个 BM25 模型”。
         #
@@ -332,6 +386,92 @@ class BM25Index:
         return index
 
 
+# =============================================================================
+# 整体流程
+# =============================================================================
+#
+# A. 建立索引
+# -----------------------------------------------------------------------------
+#
+#     data/raw 语料目录
+#              ↓ load_documents()
+#     list[Document]
+#              ↓ chunk_documents()
+#     list[Chunk]
+#              ↓ 对每个 chunk.text 执行 tokenize()
+#     tokenized_corpus（每个 Chunk 对应一个 token 列表）
+#              ↓ BM25Okapi(tokenized_corpus)
+#     整个语料共用的一个 BM25 模型
+#              ↓ BM25Index(chunks=chunks, bm25=bm25)
+#     BM25Index 对象
+#     ├── chunks：全部原始 Chunk 和来源位置
+#     └── bm25：用来计算相关性分数的索引模型
+#
+# 对应调用：
+#
+#     index = BM25Index.build_index("data/raw")
+#
+#
+# B. 搜索
+# -----------------------------------------------------------------------------
+#
+#     用户 query
+#          ↓ tokenize(query)
+#     query_tokens
+#          ↓ index.bm25.get_scores(query_tokens)
+#     scores（每个 Chunk 一个分数）
+#          ↓ 按分数从高到低排列 Chunk 下标
+#     ranked_indices
+#          ↓ 只取前 k 个下标
+#     index.chunks[index] 对应的 Chunk
+#          ↓
+#     list[Chunk] 搜索结果
+#
+# 对应调用：
+#
+#     results = index.search("How does prefix caching work?", k=5)
+#
+#
+# C. 保存索引
+# -----------------------------------------------------------------------------
+#
+#     内存中的 BM25Index 对象
+#     ├── chunks
+#     └── bm25
+#              ↓ pickle.dump()
+#     data/processed/bm25_index.pkl
+#     （pickle 二进制文件，不是 JSON）
+#
+# 对应调用：
+#
+#     BM25Index.save_index(index)
+#
+#
+# D. 在之后的程序运行中重新加载
+# -----------------------------------------------------------------------------
+#
+#     data/processed/bm25_index.pkl
+#              ↓ pickle.load()
+#     内存中的新 BM25Index 对象
+#     ├── chunks
+#     └── bm25
+#              ↓ search()
+#     可以直接搜索，不需要重新读取和分块整个语料
+#
+# 对应调用：
+#
+#     index = BM25Index.load_index()
+#     results = index.search("How does prefix caching work?", k=5)
+#
+#
+# E. 一行总结
+# -----------------------------------------------------------------------------
+#
+#     文件 -> Document -> Chunk -> token -> BM25Index
+#                                        ├── search -> top-k Chunk
+#                                        └── pickle -> .pkl -> load
+#
+#
 # =============================================================================
 # 常见问题总结（FAQ）
 # =============================================================================
