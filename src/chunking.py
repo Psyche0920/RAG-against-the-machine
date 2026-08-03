@@ -95,9 +95,10 @@ def _split_fixed_size(
                 file_path=file_path,
                 text=window,
                 first_character_index=start_offset + start,
-                # window 确实包含它的最后一个字符。因为 Python 切片的右边界
-                # 不包含在结果中，所以最后一个字符的下标要用“右边界 - 1”。
-                last_character_index=start_offset + start + len(window) - 1
+                # first_character_index/last_character_index 使用和 Python
+                # 切片相同的“左闭右开”规则：full_text[first:last] == window。
+                # 因此 last_character_index 就是窗口右边界，不需要再减 1。
+                last_character_index=start_offset + start + len(window),
             )
         )
     return chunks
@@ -124,10 +125,8 @@ def _chunk_span(
         span is longer than 'max_chunk_size'. An empty list if the span
         is blank.
     """
-    # 请分清两套数字：
-    #
-    # 1. start/end 是代码内部给 Python 切片使用的边界；
-    # 2. first_character_index/last_character_index 是最终输出的字符下标。
+    # first_character_index/last_character_index 直接复用 start/end：两者
+    # 都遵循 Python 切片的“左闭右开”规则，即 full_text[first:last] == span。
     #
     # 对 text = "abc" 来说：
     #
@@ -135,9 +134,8 @@ def _chunk_span(
     #     end = 3                         # 切片的排他右边界
     #     span = text[0:3] == "abc"       # a、b、c 全部包含
     #     first_character_index = 0
-    #     last_character_index = end - 1  # 2，c 的真实下标
+    #     last_character_index = 3        # 与 end 相同，不做 -1 调整
     #
-    # 因此最终 Chunk 是 "abc" 且下标为 (0, 2)，不是 "ab"。
     # Python 统一使用“左边包含，右边不包含”的切片规则：
     #
     #     text = "ABCDE"
@@ -146,7 +144,9 @@ def _chunk_span(
     # 它包含下标 1、2、3，不包含下标 4。因此 end 不是
     # “最后一个字符的下标”，而是“最后一个字符之后的
     # 边界”。这样切片长度可以直接计算为 end - start：
-    # 4 - 1 == 3，正好是 "BCD" 的三个字符。
+    # 4 - 1 == 3，正好是 "BCD" 的三个字符。first_character_index/
+    # last_character_index 保持同样的排他右边界，才能和 ground-truth
+    # 数据集（以及 moulinette 的 IoU 比较）使用同一套坐标系。
     span = text[start:end]
     if not span.strip():
         return []
@@ -157,9 +157,9 @@ def _chunk_span(
                 file_path=file_path,
                 text=span,
                 first_character_index=start,
-                # span == text[start:end]，end 是不包含在切片中的右边界；
-                # 因此 span 实际包含的最后一个字符位于 end - 1。
-                last_character_index=end - 1,
+                # span == text[start:end]；last_character_index 就是这个
+                # 排他右边界 end 本身。
+                last_character_index=end,
 
             )
         ]
@@ -571,6 +571,25 @@ def chunk_markdown_text(
     return chunks
 
 
+def is_code_path(file_path: str | Path) -> bool:
+    """判断某个路径应该走 Python code 切分策略，而不是 Markdown/text。
+
+    index.py 建索引时需要把 Chunk 分成 code / text 两组，分别建立
+    BM25 模型（见 index.py 顶部的说明）；这里导出这个判断，让
+    chunk_document 和 index.py 共用同一份后缀白名单，不必各自维护
+    一份可能会走样的副本。
+
+    Args:
+        file_path: 文档路径，通常是 Document.file_path 或
+            Chunk.file_path。
+
+    Returns:
+        True 表示应使用 chunk_python_code；False 表示不是已知的
+        Python 后缀（调用者仍需自行判断是否属于 Markdown/text）。
+    """
+    return Path(file_path).suffix.lower() in _CODE_SUFFIXES
+
+
 def chunk_document(
         document: Document,
         max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
@@ -596,11 +615,11 @@ def chunk_document(
     Raises:
         ValueError: 文件后缀不属于任何已支持的分块策略。
     """
-    suffix = Path(document.file_path).suffix.lower()
-    if suffix in _CODE_SUFFIXES:
+    if is_code_path(document.file_path):
         return chunk_python_code(document, max_chunk_size)
-    if suffix in _TEXT_SUFFIXES:
+    if Path(document.file_path).suffix.lower() in _TEXT_SUFFIXES:
         return chunk_markdown_text(document, max_chunk_size)
+    suffix = Path(document.file_path).suffix.lower()
     raise ValueError(
         f"Unsupported document type for chunking: {suffix or '<no suffix>'}"
     )
