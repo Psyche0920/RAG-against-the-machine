@@ -255,3 +255,17 @@ class RagCLI:
             Path(dataset_path).name,
         )
         return f"Saved student_search_results to {output_path}"
+
+
+# =============================================================================
+# CLI 命令速记
+# =============================================================================
+#
+# - index：读取原始文件 -> 分块 -> 建立 BM25 -> 保存 pickle 索引。
+# - search：加载已有索引 -> 搜索单个 query -> 返回 top-k Chunk 的来源范围。
+# - search_dataset：索引只加载一次，逐题搜索，把 Chunk 转成 MinimalSource，
+#   最后写出 moulinette 要求的 StudentSearchResults JSON。
+# - desc="Searching" / desc="Tokenizing" 只是 tqdm 进度条的动作标签，
+#   不参与检索、计分或答案生成。
+# - _format_dataset_error 统一数据集异常消息；_save_json 统一创建输出目录、
+#   Pydantic JSON 序列化和 UTF-8 写入。这两项改善一致性，不影响 Recall。

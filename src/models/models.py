@@ -97,3 +97,17 @@ class Chunk(BaseModel):
     text: str
     first_character_index: int
     last_character_index: int
+
+
+# =============================================================================
+# 数据模型速记
+# =============================================================================
+#
+# - Document 保存完整文件；Chunk 保存其中一个可检索片段；MinimalSource
+#   只保存文件路径和字符范围，不携带正文。
+# - MinimalSearchResults 表示一个问题的检索结果；StudentSearchResults
+#   包装整个数据集的结果，是 moulinette 读取的 JSON 结构。
+# - Chunk 与 MinimalSource 共用 [first, last) 排他右边界，last 实际是
+#   “最后字符下标 + 1”，因此可以直接用 full_text[first:last] 重建片段。
+# - src/models/models.py 是 Pydantic 源代码，必须被 Git 跟踪；根目录
+#   /models/ 通常存放可重新下载的大模型权重，才应该由 .gitignore 忽略。

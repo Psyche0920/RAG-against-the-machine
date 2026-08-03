@@ -651,3 +651,24 @@ def chunk_documents(
     for document in progress:
         chunks.extend(chunk_document(document, max_chunk_size))
     return chunks
+
+
+# =============================================================================
+# 分块与 AST 速记
+# =============================================================================
+#
+# - ast.stmt 是 statement（完整语句）的共同父类型，例如 Import、Assign、
+#   FunctionDef、ClassDef；不用 ast.expr，是为了避免把表达式内部拆得过碎。
+# - ast.parse(text).body（即 module.body）只包含模块顶层语句。当前实现逐个
+#   处理这些节点；FunctionDef/ClassDef 的内部 body 当前不会递归逐项拆分。
+# - cursor 是“下一个尚未处理字符的位置”，不是某个 Chunk 的专属坐标；
+#   循环每处理完一个节点就执行 cursor = end，最后只需返回/保留最终进度。
+# - 多个 Chunk 各自在 first_character_index/last_character_index 中保存
+#   自己的范围，因此多个 Chunk 对应一个最终 cursor 并不冲突。
+# - 如果未来递归处理 ClassDef.body，递归结果应保持
+#   ([member_chunk1, member_chunk2, ...], final_cursor)，拆包后用 extend 合并；
+#   不是 [(chunk1, cursor1), (chunk2, cursor2)]，也不会形成嵌套 tuple。
+# - 递归返回 None 应作为“AST 边界不可靠”的失败信号逐层上传，最外层再
+#   回退到固定长度切分；当前非递归实现直接在缺少 end_lineno 时回退。
+# - 字符范围统一使用 Python 左闭右开语义：[first, last)，所以
+#   document.text[first:last] == chunk.text；last 是最后字符下标 + 1。
