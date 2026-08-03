@@ -28,7 +28,7 @@ data/raw/*
 data/processed/*
 data/output/*
 
-# Local model files
-models/
+# Local model files (root-level only; do not match src/models/)
+/models/
 *.safetensors
 *.bin
