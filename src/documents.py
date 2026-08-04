@@ -5,7 +5,8 @@ from typing import Final, Iterable
 
 from tqdm import tqdm
 
-from src.models.models import Document
+from src.models.models import Document, MinimalSource
+
 
 SUPPORTED_SUFFIXES: Final[frozenset[str]] = frozenset(
     {
@@ -182,3 +183,27 @@ def load_documents(
 
     # Return a list of Document(file_path=..., text=...) objects.
     return documents
+
+
+def read_source_text(source: MinimalSource) -> str:
+    """Read the text a MinimalSource points to from the on-disk corpus.
+
+    Args:
+        source: A retrieved source location (file_path + character range).
+
+
+    Returns:
+        The textbeween first_character_index and last_character_index.
+        or an empty string if the file cannot be read.
+    """
+    try:
+        text = Path(source.file_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    start = source.first_character_index
+    end = source.last_character_index
+
+    if start < 0 or end < start or end > len(text):
+        return ""
+
+    return text[source.first_character_index:source.last_character_index]
