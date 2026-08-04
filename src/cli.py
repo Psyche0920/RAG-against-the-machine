@@ -30,7 +30,8 @@ class RagCLI:
         fallback_path: str,
     ) -> str:
         """将数据集相关异常转换为统一的 CLI 错误消息。"""
-        # 文件系统异常通常携带实际出错路径；fallback 用于异常未提供路径时。
+        # 当前调用中 error_path 通常等于 fallback_path；仍优先保留
+        # 文件系统异常自带的 filename，异常无路径时才使用 fallback。
         error_path = getattr(error, "filename", None) or fallback_path
 
         if isinstance(error, FileNotFoundError):
@@ -229,6 +230,7 @@ class RagCLI:
 
         progress: Iterable[AnsweredQuestion | UnansweredQuestion] = tqdm(
             dataset.rag_questions,
+            # desc is a display-only action label; unit matches one loop item.
             desc="Searching",
             unit="question",
         )
@@ -267,5 +269,8 @@ class RagCLI:
 #   最后写出 moulinette 要求的 StudentSearchResults JSON。
 # - desc="Searching" / desc="Tokenizing" 只是 tqdm 进度条的动作标签，
 #   不参与检索、计分或答案生成。
+# - unit 与每次迭代的对象一致：question / file / chunk，也只影响显示。
+# - copy_dataset 保留当前名称；它在保存副本前会先加载并验证数据集。
+# - 当前调用中 error_path 通常等于 fallback_path，同时兼容异常自带的 filename。
 # - _format_dataset_error 统一数据集异常消息；_save_json 统一创建输出目录、
 #   Pydantic JSON 序列化和 UTF-8 写入。这两项改善一致性，不影响 Recall。
