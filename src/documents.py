@@ -8,6 +8,8 @@ from tqdm import tqdm
 from src.models.models import Document, MinimalSource
 
 
+# data/raw 是原始 vLLM corpus；程序递归读取这些代码和文本文件，
+# 不需要传统数据库。建好的 BM25 索引另存为 pickle。
 SUPPORTED_SUFFIXES: Final[frozenset[str]] = frozenset(
     {
         ".py",
@@ -191,9 +193,8 @@ def read_source_text(source: MinimalSource) -> str:
     Args:
         source: A retrieved source location (file_path + character range).
 
-
     Returns:
-        The textbeween first_character_index and last_character_index.
+        The text between first_character_index and last_character_index,
         or an empty string if the file cannot be read.
     """
     try:

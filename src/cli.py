@@ -397,6 +397,8 @@ class RagCLI:
                 error, student_search_results_path
             )
 
+        # ground_truth 是数据集给出的标准来源，不是程序生成的答案。
+        # retrieved_by_id 是 BM25 对每个问题实际找回的来源。
         ground_truth = {
             question.question_id: question.sources
             for question in dataset.rag_questions
@@ -408,6 +410,7 @@ class RagCLI:
         }
 
         lines = ["Evaluation Results", "=" * 40]
+        # Recall@k：只看排名前 k 的检索结果，但分母仍是全部正确来源。
         for cutoff in (1, 3, 5, 10):
             recalls = []
             for question_id, sources in ground_truth.items():
@@ -436,6 +439,7 @@ class RagCLI:
 
 def _iou(a_start: int, a_end: int, b_start: int, b_end: int) -> float:
     """Compute the intersection-over-union of two character ranges."""
+    # IoU = 两个字符区间的重叠长度 / 合并后的总长度。
     intersection = max(0, min(a_end, b_end) - max(a_start, b_start))
     if intersection <= 0:
         return 0.0
@@ -449,6 +453,8 @@ def _is_match(
     iou_threshold: float = 0.05,
 ) -> bool:
     """Check whether a retrieved source matches a ground-truth source."""
+    # 官方命中条件是同一文件且 IoU >= 0.05；它只评估检索位置，
+    # 不保证重叠文字包含完整答案，也不评估模型生成的 answer。
     if source.file_path != candidate.file_path:
         return False
     return (

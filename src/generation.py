@@ -78,8 +78,8 @@ class AnswerGenerator:
             model_name,
             torch_dtype="auto",
         )
-        # Tell the type checker this is a no-argument method, then call it
-        # to switch the model to evaluation mode.
+        # eval() 是模型的推理模式，不是 CLI 的 evaluate/官方评分。
+        # cast 只向 mypy 说明 eval 是无参数方法，不改变实际运行结果。
         cast(Callable[[], object], self.model.eval)()
 
         context_window = getattr(
@@ -133,7 +133,11 @@ class AnswerGenerator:
         )
         # **inputs 等价于分别传入 input_ids 和 attention_mask。
         # output_ids 包含原输入 token ID 和模型新生成的 token ID。
-        output_ids = self.model.generate(
+        # transformers 的 generate() 用了一个自绑定的泛型 self 类型，
+        # AutoModelForCausalLM.from_pretrained() 的推断返回类型无法
+        # 精确匹配它，这是上游的类型标注问题，不是真正的类型错误
+        # （同样的原因见上面 self.model.eval() 处的 cast）。
+        output_ids = self.model.generate(  # type: ignore[misc]
             **inputs,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,

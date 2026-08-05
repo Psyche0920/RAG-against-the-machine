@@ -6,6 +6,7 @@ dependencies = [
     "fire>=0.7.1",
     "pydantic>=2.13.4",
     "rank-bm25>=0.2.2",
+    "torch>=2.0",  # transformers backend for AutoModelForCausalLM
     "tqdm>=4.69.0",
     "transformers>=5.14.1",  # load Qwen/Qwen3-0.6B
 ]
@@ -24,3 +25,18 @@ dev = [
 [[tool.mypy.overrides]]
 module = ["fire", "rank_bm25", "tqdm", "tqdm.*"]
 ignore_missing_imports = true
+
+# This project only needs CPU inference (Qwen/Qwen3-0.6B). The default
+# PyPI 'torch' wheel bundles the full CUDA/GPU stack (cuDNN, NCCL,
+# cuSolver, several GB), which is unnecessary here and can exhaust disk
+# space on small machines. Route 'torch' to PyTorch's CPU-only wheel
+# index instead; every other dependency still resolves from PyPI.
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
