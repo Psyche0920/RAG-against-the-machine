@@ -77,7 +77,7 @@ class AnswerGenerator:
             model_name,
             torch_dtype="auto",
         )
-        self.model.eval()  # type: ignore[no-untyped-call]
+        self.model.eval()
 
         context_window = getattr(
             self.model.config,
