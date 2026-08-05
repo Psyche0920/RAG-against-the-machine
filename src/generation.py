@@ -1,5 +1,6 @@
 """Answer generation using a local Hugging Face causal language model."""
 
+from collections.abc import Callable
 from typing import Final, cast
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -77,7 +78,9 @@ class AnswerGenerator:
             model_name,
             torch_dtype="auto",
         )
-        self.model.eval()
+        # Tell the type checker this is a no-argument method, then call it
+        # to switch the model to evaluation mode.
+        cast(Callable[[], object], self.model.eval)()
 
         context_window = getattr(
             self.model.config,
