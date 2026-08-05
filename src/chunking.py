@@ -7,7 +7,7 @@ from typing import Final, Iterable, Iterator
 
 from tqdm import tqdm
 
-from src.models.models import Chunk, Document
+from src.models import Chunk, Document
 
 DEFAULT_MAX_CHUNK_SIZE: Final[int] = 2000
 

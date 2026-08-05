@@ -1,0 +1,16 @@
+[flake8]
+# The subject's Makefile spec requires `flake8 .` (project root), not
+# `flake8 src`. Run literally from `.` without these excludes and flake8
+# walks into .venv/ (third-party code, not ours) and data/raw/ (the vendored
+# vLLM corpus, gitignored and not ours either) and breaks on code we did not
+# write. Exclude everything that is not this project's own source.
+exclude =
+    .venv,
+    .git,
+    __pycache__,
+    .mypy_cache,
+    .pytest_cache,
+    data,
+    materials,
+    build,
+    dist

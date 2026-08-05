@@ -18,6 +18,15 @@ dev = [
     "pytest>=9.1.1",
 ]
 
+# The subject's Makefile spec requires `mypy .` (project root), not
+# `mypy src`. Run literally from `.` without this exclude and mypy walks
+# into .venv/, data/raw/ (the vendored vLLM corpus), and materials/ (a
+# second corpus copy) — none of it ours, and it breaks mypy's module
+# resolution (duplicate module names across vLLM's own files). Restrict
+# checking to this project's own source and tests.
+[tool.mypy]
+exclude = "^(\\.venv/|data/|materials/)"
+
 # Python Fire does not publish type information, and types-tqdm is not a
 # runtime dependency of this project. Ignore missing declarations only at
 # these third-party boundaries; our own src package is still checked with
@@ -40,3 +49,14 @@ torch = [
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+# Without this, `pytest` collects from the whole repository, including the
+# vLLM corpus under data/raw/ (which has its own, unrelated test suite that
+# fails to import here). Restrict collection to this project's own tests.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `uv run pytest` does not add the project root to sys.path by itself
+# (unlike `uv run python -m pytest`), so `from src... import ...` in the
+# tests would otherwise fail with ModuleNotFoundError. This makes it explicit
+# instead of relying on how pytest happens to be invoked.
+pythonpath = ["."]

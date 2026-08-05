@@ -9,7 +9,7 @@ from tqdm import tqdm
 from src.chunking import DEFAULT_MAX_CHUNK_SIZE
 from src.dataset import load_dataset, save_dataset
 from src.index import DEFAULT_INDEX_DIRECTORY, BM25Index
-from src.models.models import (
+from src.models import (
     AnsweredQuestion,
     MinimalAnswer,
     MinimalSearchResults,
@@ -282,6 +282,12 @@ class RagCLI:
             The generated answer, or a message describing why it could
             not be produced.
         """
+        # AnswerGenerator.generate() rejects a blank question with
+        # ValueError. Check first so an empty/whitespace-only query fails
+        # with a clear message instead of loading the model just to crash.
+        if not query.strip():
+            return "Error: query must not be empty."
+
         try:
             bm25_index = BM25Index.load_index(index_directory)
         except OSError as error:
@@ -343,21 +349,29 @@ class RagCLI:
 
         # result = 一个 MinimalSearchResults；source = 一个 MinimalSource。
         # 每个 source 恢复成 chunk 文本，供模型生成 answer。
-        answers = [
-            MinimalAnswer(
-                question_id=result.question_id,
-                question=result.question,
-                retrieved_sources=result.retrieved_sources,
-                answer=generator.generate(
+        # AnswerGenerator.generate() 对空白 question 会抛 ValueError；
+        # 一批题目里只要有一题是空白，就不能让整批全部崩溃、白跑前面
+        # 已经生成的答案，所以这里单独接住这一种错误，换成占位说明。
+        answers = []
+        for result in progress:
+            try:
+                answer_text = generator.generate(
                     result.question,
                     [
                         read_source_text(source)
                         for source in result.retrieved_sources
                     ],
-                ),
+                )
+            except ValueError:
+                answer_text = "Error: question must not be empty."
+            answers.append(
+                MinimalAnswer(
+                    question_id=result.question_id,
+                    question=result.question,
+                    retrieved_sources=result.retrieved_sources,
+                    answer=answer_text,
+                )
             )
-            for result in progress
-        ]
 
         # 输出仍是整个数据集，每项由 MinimalSearchResults
         # 变成带 answer 字段的 MinimalAnswer。

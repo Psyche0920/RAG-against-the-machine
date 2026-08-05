@@ -1,5 +1,5 @@
 from pathlib import Path
-from src.models.models import RagDataset
+from src.models import RagDataset
 
 
 def load_dataset(file_path: str | Path) -> RagDataset:

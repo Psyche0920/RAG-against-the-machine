@@ -32,3 +32,9 @@ data/output/*
 /models/
 *.safetensors
 *.bin
+
+# Reference material handed out for the project (subject PDF, moulinette
+# binaries, the raw vLLM zip/extracted copy, sample datasets). All of this
+# is downloadable from the school intranet; the subject explicitly says not
+# to commit large data files, model weights, or generated outputs.
+/materials/

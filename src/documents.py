@@ -5,7 +5,7 @@ from typing import Final, Iterable
 
 from tqdm import tqdm
 
-from src.models.models import Document, MinimalSource
+from src.models import Document, MinimalSource
 
 
 # data/raw 是原始 vLLM corpus；程序递归读取这些代码和文本文件，

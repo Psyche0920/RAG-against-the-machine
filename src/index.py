@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from src.chunking import DEFAULT_MAX_CHUNK_SIZE, chunk_documents
 from src.documents import load_documents
-from src.models.models import Chunk
+from src.models import Chunk
 
 
 # 如果调用者没有指定目录，索引默认保存在这里。
@@ -357,7 +357,8 @@ class BM25Index:
             从 pickle 数据还原的 BM25Index。
 
         Raises:
-            FileNotFoundError: 指定目录中不存在索引文件。
+            FileNotFoundError: 指定目录中不存在索引文件，或索引文件
+                无法被还原（例如项目代码改动后索引已经过期/损坏）。
         """
         index_path = Path(directory_path) / _INDEX_FILE_NAME
         if not index_path.exists():
@@ -380,8 +381,28 @@ class BM25Index:
         #
         # 安全注意：pickle.load() 可能执行文件中指定的 Python 代码，
         # 因此只能加载本项目自己生成、可信任的 .pkl 文件。
-        with index_path.open("rb") as index_file:
-            index: BM25Index = pickle.load(index_file)
+        #
+        # pickle 记录的是"完整类路径"（例如 src.models.Chunk）。如果
+        # 索引是在一次重构（比如移动/改名某个模块）之前建立的，pickle
+        # 会尝试导入一个已经不存在的旧路径，抛出 ModuleNotFoundError/
+        # AttributeError，而不是 FileNotFoundError。这里把这类"索引
+        # 本身能找到、但内容还原失败"的情况，统一转换成调用者已经在
+        # 处理的 FileNotFoundError，附带清晰的重建提示，而不是让原始
+        # pickle traceback 直接崩溃到用户面前。
+        try:
+            with index_path.open("rb") as index_file:
+                index: BM25Index = pickle.load(index_file)
+        except (
+            pickle.UnpicklingError,
+            ModuleNotFoundError,
+            AttributeError,
+            EOFError,
+        ) as error:
+            raise FileNotFoundError(
+                f"Index at {index_path} could not be loaded (it may be "
+                f"stale or corrupted: {error}); run the index command "
+                f"again to rebuild it."
+            ) from error
 
         return index
 
