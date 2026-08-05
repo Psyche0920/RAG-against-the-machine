@@ -40,7 +40,7 @@ class AnsweredQuestion(UnansweredQuestion):
 
 
 class RagDataset(BaseModel):
-    """"Represent a dataset containing RAG questions."""
+    """Represent a dataset containing RAG questions."""
 
     rag_questions: List[
         AnsweredQuestion | UnansweredQuestion
@@ -69,7 +69,7 @@ class StudentSearchResults(BaseModel):
 
 
 class StudentSearchResultsAndAnswer(BaseModel):
-    """Represent dataset search results with genreated answer."""
+    """Represent dataset search results with generated answers."""
 
     search_results: List[MinimalAnswer]
     k: int

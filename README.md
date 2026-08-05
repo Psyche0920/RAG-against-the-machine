@@ -54,6 +54,9 @@ uv run python -m src answer_dataset --student_search_results_path <path> --save_
 uv run python -m src evaluate --student_search_results_path <path> --dataset_path <path>
 ```
 
+Single-query `search` and `answer` print structured JSON to stdout. Batch
+commands write the same Pydantic-based structures to the requested directory.
+
 `make run` / `make debug` / `make clean` / `make lint` / `make lint-strict` /
 `make test` also available.
 
@@ -200,15 +203,36 @@ throughput requirement (that's retrieval-only), but budget time for it.
 $ uv run python -m src index --max_chunk_size 2000
 Ingestion complete! Indexed 35327 chunks under data/processed/
 
-$ uv run python -m src search "How to configure the OpenAI server?" -k 3
-data/raw/vllm-0.10.1/docs/serving/openai_compatible_server.md [9867:10100]
-data/raw/vllm-0.10.1/vllm/entrypoints/openai/api_server.py [267:400]
-data/raw/vllm-0.10.1/examples/online_serving/openai_chat_completion_client_with_tools.py [0:2000]
+$ uv run python -m src search \
+    "What HTTP endpoint dynamically loads a LoRA adapter?" -k 1
+{
+  "search_results": [{
+    "question_id": "<generated UUID>",
+    "question": "What HTTP endpoint dynamically loads a LoRA adapter?",
+    "retrieved_sources": [{
+      "file_path": "data/raw/vllm-0.10.1/docs/features/lora.md",
+      "first_character_index": 3835,
+      "last_character_index": 5714
+    }]
+  }],
+  "k": 1
+}
 
-$ uv run python -m src answer "How do I configure the OpenAI compatible server?" -k 3
-The OpenAI compatible server can be configured by starting the vLLM
-server with `vllm serve <model>` and passing standard OpenAI-compatible
-options such as --port and --api-key...
+$ uv run python -m src answer \
+    "What HTTP endpoint dynamically loads a LoRA adapter?" -k 1
+{
+  "search_results": [{
+    "question_id": "<generated UUID>",
+    "question": "What HTTP endpoint dynamically loads a LoRA adapter?",
+    "retrieved_sources": [{
+      "file_path": "data/raw/vllm-0.10.1/docs/features/lora.md",
+      "first_character_index": 3835,
+      "last_character_index": 5714
+    }],
+    "answer": "The HTTP endpoint dynamically loading a LoRA adapter is `/v1/load_lora_adapter`."
+  }],
+  "k": 1
+}
 
 $ uv run python -m src evaluate \
     --student_search_results_path data/output/search_results/AnsweredQuestions/dataset_docs_public.json \
@@ -238,10 +262,10 @@ kept fast and dependency-light so it always runs in a couple of seconds.
 
 | # | Case | Command | Expected | Verified result |
 |---|---|---|---|---|
-| 1 | Empty query | `search "" -k 5` | no crash | ✅ `No results found.` |
-| 2 | `k=0` | `search "query" -k 0` | no crash | ✅ `No results found.` |
-| 3 | Negative `k` | `search "query" -k -3` | no crash | ✅ `No results found.` |
-| 4 | Query is only stopwords | `search "the is of a" -k 5` | no crash | ✅ `No results found.` |
+| 1 | Empty query | `search "" -k 5` | no crash | ✅ valid JSON with `retrieved_sources: []` |
+| 2 | `k=0` | `search "query" -k 0` | no crash | ✅ valid JSON with `retrieved_sources: []` |
+| 3 | Negative `k` | `search "query" -k -3` | no crash | ✅ valid JSON with `retrieved_sources: []` |
+| 4 | Query has no searchable match | `search "zzzz_nonexistent_token" -k 5` | no arbitrary results | ✅ valid JSON with `retrieved_sources: []` |
 | 5 | Dataset file missing | `search_dataset --dataset_path <missing>` | no crash | ✅ `Error: file not found: ...` |
 | 6 | Path is a directory, not a file | `search_dataset --dataset_path data/datasets` | no crash | ✅ `Error: expected a file, got directory: ...` |
 | 7 | Malformed JSON | `search_dataset --dataset_path <bad.json>` | no crash | ✅ `Error: invalid RAG dataset: ...` |

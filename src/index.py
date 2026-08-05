@@ -170,6 +170,13 @@ class BM25Index:
         if not query_tokens:
             return []
 
+        # A token absent from bm25.idf never appeared in the indexed corpus.
+        # If none of the query tokens exist in the vocabulary, every Chunk
+        # would receive the same zero score and sorting would return arbitrary
+        # corpus entries. Treat that case as no match instead.
+        if not any(token in self.bm25.idf for token in query_tokens):
+            return []
+
         # get_scores() 会给语料中的每个 Chunk 计算一个分数。
         # scores 和 self.chunks 的长度相同，而且位置一一对应：
         #
@@ -185,7 +192,7 @@ class BM25Index:
         #
         # range(len(self.chunks)) 首先产生下标 [0, 1, 2]。
         # key=lambda index: scores[index] 告诉 sorted：
-        #
+        #Qwen 权重未完整下载，离线运行 answer 会在 [src/cli.py (line 327)](/home/wehan/RAG/Github/src/cli.py:327) 出现未捕获 traceback，需要增加模型加载异常处理。
         #     下标 0 的排序值是 scores[0] == 0.2
         #     下标 1 的排序值是 scores[1] == 3.5
         #     下标 2 的排序值是 scores[2] == 1.1
@@ -246,7 +253,18 @@ class BM25Index:
         Raises:
             FileNotFoundError: ``raw_directory`` 不存在。
             NotADirectoryError: ``raw_directory`` 不是目录。
+            ValueError: ``max_chunk_size`` 超出允许范围，或语料中没有
+                可以建立索引的内容。
         """
+        # CLI 会先检查一次，但这里也必须保护底层 API。否则其他代码直接
+        # 调用 build_index(..., -1) 时，负数仍会一路传到 range()/BM25，
+        # 最后以难以理解的 ZeroDivisionError 结束。
+        if not 1 <= max_chunk_size <= DEFAULT_MAX_CHUNK_SIZE:
+            raise ValueError(
+                "max_chunk_size must be between 1 and "
+                f"{DEFAULT_MAX_CHUNK_SIZE} characters."
+            )
+
         # 第一步：从目录读取支持的文件，得到 Document 列表。
         documents = load_documents(
             raw_directory,
@@ -259,6 +277,14 @@ class BM25Index:
             max_chunk_size,
             show_progress=show_progress,
         )
+
+        # rank_bm25 不能用空列表建立模型，会在内部计算平均文档长度时
+        # 除以零。这里在第三方库边界前给出可理解、可由 CLI 捕获的错误。
+        # 该判断也覆盖目录只有空文件或没有受支持文件类型的情况。
+        if not chunks:
+            raise ValueError(
+                f"No indexable chunks found in corpus: {raw_directory}"
+            )
 
         # 第三步：每个 Chunk 变成一个 token 列表。
         # tokenized_corpus[i] 必须始终对应 chunks[i]。
@@ -321,6 +347,11 @@ class BM25Index:
             已写入的索引文件路径。
         """
         directory = Path(directory_path)
+
+        if directory.exists() and not directory.is_dir():
+            raise NotADirectoryError(
+                f"expected an output directory, got file: {directory}"
+            )
 
         # parents=True 会创建缺少的父目录，exist_ok=True 表示
         # 目录已经存在时不报错。

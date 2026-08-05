@@ -1,1 +1,1 @@
-"""Retrieval-Augumented Generation package for the vLLM codebase."""
+"""Retrieval-Augmented Generation package for the vLLM codebase."""

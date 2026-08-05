@@ -7,12 +7,38 @@ seconds and never needs the corpus or a downloaded model.
 """
 
 from pathlib import Path
+from typing import NoReturn
+
+import pytest
+from rank_bm25 import BM25Okapi
 
 from src.chunking import chunk_document
-from src.cli import _is_match, _iou
+from src.cli import RagCLI, _is_match, _iou
 from src.documents import read_source_text
-from src.index import tokenize
-from src.models import Document, MinimalSource
+from src.index import BM25Index, tokenize
+from src.models import (
+    Chunk,
+    Document,
+    MinimalSource,
+    StudentSearchResults,
+)
+
+
+def _save_tiny_index(directory: Path) -> None:
+    """Save a one-chunk BM25 index for CLI tests."""
+    chunk = Chunk(
+        file_path="sample.py",
+        text="prefix caching",
+        first_character_index=0,
+        last_character_index=14,
+    )
+    BM25Index.save_index(
+        BM25Index(
+            chunks=[chunk],
+            bm25=BM25Okapi([tokenize(chunk.text)]),
+        ),
+        directory,
+    )
 
 
 # 测试 tokenize()：一句英文问题分词后，虚词（what/is/the/of）应该被去掉，
@@ -33,6 +59,153 @@ def test_tokenize_lowercases_and_drops_stopwords() -> None:
 def test_tokenize_empty_or_blank_returns_no_tokens() -> None:
     assert tokenize("") == []
     assert tokenize("   ") == []
+
+
+# 测试完全不在索引词表中的 query：所有 BM25 分数原本都会是 0，
+# 不能因此返回语料开头的任意 Chunk，而应该明确表示没有匹配结果。
+def test_search_unknown_tokens_returns_no_chunks() -> None:
+    chunk = Chunk(
+        file_path="sample.py",
+        text="prefix caching",
+        first_character_index=0,
+        last_character_index=14,
+    )
+    bm25 = BM25Okapi([tokenize(chunk.text)])
+    index = BM25Index(chunks=[chunk], bm25=bm25)
+    assert index.search("zzzz_nonexistent_token_987654", k=5) == []
+
+
+# 测试单条 search 也使用 subject 规定的 StudentSearchResults JSON，
+# 而不是只返回供人阅读、无法被程序可靠解析的文本行。
+def test_single_search_returns_structured_json(tmp_path: Path) -> None:
+    _save_tiny_index(tmp_path)
+
+    output = RagCLI().search(
+        "prefix caching",
+        k=1,
+        index_directory=str(tmp_path),
+    )
+    result = StudentSearchResults.model_validate_json(output)
+
+    assert result.k == 1
+    assert len(result.search_results) == 1
+    assert result.search_results[0].retrieved_sources == [
+        MinimalSource(
+            file_path="sample.py",
+            first_character_index=0,
+            last_character_index=14,
+        )
+    ]
+
+
+# 2000 不只是默认值，也是 subject 的硬上限；CLI 必须在读取 corpus 前
+# 拒绝 0、负数和大于 2000 的值，避免崩溃或生成无效来源。
+def test_index_rejects_chunk_sizes_outside_subject_limit() -> None:
+    cli = RagCLI()
+    expected = (
+        "Error: max_chunk_size must be between 1 and 2000 characters."
+    )
+
+    assert cli.index(max_chunk_size=0) == expected
+    assert cli.index(max_chunk_size=-1) == expected
+    assert cli.index(max_chunk_size=2001) == expected
+
+
+# CLI 之外的调用者也可能直接使用 build_index()；底层边界必须重复
+# 验证，不能让负数穿透到 rank_bm25 后才变成 ZeroDivisionError。
+def test_build_index_rejects_negative_chunk_size(tmp_path: Path) -> None:
+    with pytest.raises(
+        ValueError,
+        match="max_chunk_size must be between 1 and 2000 characters",
+    ):
+        BM25Index.build_index(
+            tmp_path,
+            max_chunk_size=-1,
+            show_progress=False,
+        )
+
+
+# 空目录没有任何 chunk；应由我们返回明确错误，而不是让 BM25Okapi
+# 在计算平均文档长度时抛 ZeroDivisionError。
+def test_index_empty_corpus_returns_controlled_error(
+    tmp_path: Path,
+) -> None:
+    raw_directory = tmp_path / "raw"
+    raw_directory.mkdir()
+    index_directory = tmp_path / "processed"
+
+    result = RagCLI().index(
+        raw_directory=str(raw_directory),
+        index_directory=str(index_directory),
+    )
+
+    assert result == (
+        f"Error: No indexable chunks found in corpus: {raw_directory}"
+    )
+    assert not (index_directory / "bm25_index.pkl").exists()
+
+
+# index/search_dataset/answer_dataset 的输出参数都必须是目录。若该路径
+# 已经是文件，应在任何耗时工作之前返回同一个受控错误。
+def test_cli_rejects_output_directory_that_is_a_file(
+    tmp_path: Path,
+) -> None:
+    blocked_path = tmp_path / "blocked"
+    blocked_path.write_text("not a directory", encoding="utf-8")
+    expected = (
+        f"Error: expected an output directory, got file: {blocked_path}"
+    )
+    cli = RagCLI()
+
+    assert cli.index(
+        raw_directory=str(tmp_path / "unused-corpus"),
+        index_directory=str(blocked_path),
+    ) == expected
+    assert cli.search_dataset(
+        dataset_path=str(tmp_path / "unused-dataset.json"),
+        save_directory=str(blocked_path),
+    ) == expected
+    assert cli.answer_dataset(
+        student_search_results_path=str(tmp_path / "unused-results.json"),
+        save_directory=str(blocked_path),
+    ) == expected
+
+
+# 用 monkeypatch 模拟 Hugging Face 离线/权重缺失，不访问网络。单条和
+# 批量 answer 都应返回 Error 字符串，不能把第三方 OSError traceback
+# 泄漏给 CLI 用户。
+def test_answer_commands_handle_model_load_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index_directory = tmp_path / "index"
+    _save_tiny_index(index_directory)
+    student_results_path = tmp_path / "search-results.json"
+    student_results_path.write_text(
+        StudentSearchResults(search_results=[], k=1).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    def fail_model_load(_model_name: str) -> NoReturn:
+        raise OSError("model unavailable")
+
+    monkeypatch.setattr("src.cli.AnswerGenerator", fail_model_load)
+    expected = (
+        "Error: model 'missing/model' could not be loaded: "
+        "model unavailable"
+    )
+
+    assert RagCLI().answer(
+        "prefix caching",
+        k=1,
+        index_directory=str(index_directory),
+        model_name="missing/model",
+    ) == expected
+    assert RagCLI().answer_dataset(
+        student_search_results_path=str(student_results_path),
+        save_directory=str(tmp_path / "answers"),
+        model_name="missing/model",
+    ) == expected
 
 
 # 测试 Python 代码分块：不管切成几个 chunk，每个 chunk 的
