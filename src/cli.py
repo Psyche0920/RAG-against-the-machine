@@ -11,11 +11,16 @@ from src.dataset import load_dataset, save_dataset
 from src.index import DEFAULT_INDEX_DIRECTORY, BM25Index
 from src.models.models import (
     AnsweredQuestion,
+    MinimalAnswer,
     MinimalSearchResults,
     MinimalSource,
     StudentSearchResults,
+    StudentSearchResultsAndAnswer,
     UnansweredQuestion,
 )
+
+from src.documents import read_source_text
+from src.generation import DEFAULT_MODEL_NAME, AnswerGenerator
 
 
 class RagCLI:
@@ -257,6 +262,204 @@ class RagCLI:
             Path(dataset_path).name,
         )
         return f"Saved student_search_results to {output_path}"
+
+    def answer(
+        self,
+        query: str,
+        k: int = 10,
+        index_directory: str = DEFAULT_INDEX_DIRECTORY,
+        model_name: str = DEFAULT_MODEL_NAME,
+    ) -> str:
+        """Answer a single query using retrieved context.
+
+        Args:
+            query: Natural language or code search question.
+            k: Maximum number of sources to retrieve as context.
+            index_directory: Directory containing the persisted index.
+            model_name: Hugging Face model id to generate the answer with.
+
+        Returns:
+            The generated answer, or a message describing why it could
+            not be produced.
+        """
+        try:
+            bm25_index = BM25Index.load_index(index_directory)
+        except OSError as error:
+            return f"Error: {error}"
+
+        chunks = bm25_index.search(query, k)
+        generator = AnswerGenerator(model_name)
+        return generator.generate(query, [chunk.text for chunk in chunks])
+
+    def answer_dataset(
+        self,
+        student_search_results_path: str,
+        save_directory: str,
+        model_name: str = DEFAULT_MODEL_NAME,
+    ) -> str:
+        """Generate answers for every question in a search-results file.
+
+        Args:
+            student_search_results_path: Path to a StudentSearchResults
+                JSON file, e.g. produced by 'search_dataset'.
+            save_directory: Directory the StudentSearchResultsAndAnswer
+                JSON file is written under.
+            model_name: Hugging Face model id to generate answers with.
+
+        Returns:
+            A message confirming where the results were saved, or a
+            message describing why the command could not run.
+        """
+        try:
+            json_content = Path(student_search_results_path).read_text(
+                encoding="utf-8"
+            )
+            student_results = StudentSearchResults.model_validate_json(
+                json_content
+            )
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            UnicodeDecodeError,
+            ValidationError,
+        ) as error:
+            return self._format_dataset_error(
+                error, student_search_results_path
+            )
+        except OSError as error:
+            return f"Error: {error}"
+
+        # 模型只加载一次，再重复回答所有问题。
+        generator = AnswerGenerator(model_name)
+
+        # StudentSearchResults = 多个问题的检索结果。
+        # MinimalSearchResults = 一个问题的检索结果。
+        # MinimalSource = 该问题检索到的一个来源。
+        progress: Iterable[MinimalSearchResults] = tqdm(
+            student_results.search_results,
+            desc="Answering",
+            unit="question",
+        )
+
+        # result = 一个 MinimalSearchResults；source = 一个 MinimalSource。
+        # 每个 source 恢复成 chunk 文本，供模型生成 answer。
+        answers = [
+            MinimalAnswer(
+                question_id=result.question_id,
+                question=result.question,
+                retrieved_sources=result.retrieved_sources,
+                answer=generator.generate(
+                    result.question,
+                    [
+                        read_source_text(source)
+                        for source in result.retrieved_sources
+                    ],
+                ),
+            )
+            for result in progress
+        ]
+
+        # 输出仍是整个数据集，每项由 MinimalSearchResults
+        # 变成带 answer 字段的 MinimalAnswer。
+        output_path = self._save_json(
+            StudentSearchResultsAndAnswer(
+                search_results=answers, k=student_results.k
+            ),
+            save_directory,
+            Path(student_search_results_path).name,
+        )
+        return f"Saved student_search_results_and_answer to {output_path}"
+
+    def evaluate(
+        self,
+        student_search_results_path: str,
+        dataset_path: str,
+    ) -> str:
+        """Report recall@k against a ground-truth dataset, for local use.
+
+        This mirrors the moulinette's recall@k definition (same file_path,
+        IoU >= 0.05) but is not the official score used for grading.
+        """
+        try:
+            student_results = StudentSearchResults.model_validate_json(
+                Path(student_search_results_path).read_text(
+                    encoding="utf-8"
+                )
+            )
+            dataset = load_dataset(dataset_path)
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            UnicodeDecodeError,
+            ValidationError,
+        ) as error:
+            return self._format_dataset_error(
+                error, student_search_results_path
+            )
+
+        ground_truth = {
+            question.question_id: question.sources
+            for question in dataset.rag_questions
+            if isinstance(question, AnsweredQuestion)
+        }
+        retrieved_by_id = {
+            result.question_id: result.retrieved_sources
+            for result in student_results.search_results
+        }
+
+        lines = ["Evaluation Results", "=" * 40]
+        for cutoff in (1, 3, 5, 10):
+            recalls = []
+            for question_id, sources in ground_truth.items():
+                if not sources:
+                    continue
+                retrieved = retrieved_by_id.get(question_id, [])[:cutoff]
+                found = sum(
+                    1
+                    for source in sources
+                    if any(
+                        _is_match(source, candidate)
+                        for candidate in retrieved
+                    )
+                )
+                recalls.append(found / len(sources))
+            mean_recall = (
+                sum(recalls) / len(recalls) if recalls else 0.0
+            )
+            lines.append(
+                f"Recall@{cutoff}: {mean_recall:.3f} "
+                f"({mean_recall * 100:.1f}%)"
+            )
+
+        return "\n".join(lines)
+
+
+def _iou(a_start: int, a_end: int, b_start: int, b_end: int) -> float:
+    """Compute the intersection-over-union of two character ranges."""
+    intersection = max(0, min(a_end, b_end) - max(a_start, b_start))
+    if intersection <= 0:
+        return 0.0
+    union = max(a_end, b_end) - min(a_start, b_start)
+    return intersection / union if union > 0 else 0.0
+
+
+def _is_match(
+    source: MinimalSource,
+    candidate: MinimalSource,
+    iou_threshold: float = 0.05,
+) -> bool:
+    """Check whether a retrieved source matches a ground-truth source."""
+    if source.file_path != candidate.file_path:
+        return False
+    return (
+        _iou(
+            source.first_character_index,
+            source.last_character_index,
+            candidate.first_character_index,
+            candidate.last_character_index,
+        )
+        >= iou_threshold
+    )
 
 
 # =============================================================================
