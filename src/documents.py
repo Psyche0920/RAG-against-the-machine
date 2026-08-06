@@ -8,8 +8,6 @@ from tqdm import tqdm
 from src.models import Document, MinimalSource
 
 
-# data/raw 是原始 vLLM corpus；程序递归读取这些代码和文本文件，
-# 不需要传统数据库。建好的 BM25 索引另存为 pickle。
 SUPPORTED_SUFFIXES: Final[frozenset[str]] = frozenset(
     {
         ".py",
@@ -166,9 +164,6 @@ def load_documents(
     """
     document_paths = find_document_paths(directory_path)
 
-    # Iterable[Path] says progress can yield Path objects; it is not a list.
-    # tqdm creates the wrapper here, but advances only when it is iterated
-    # below.
     progress: Iterable[Path] = tqdm(
         document_paths,
         desc="Loading documents",

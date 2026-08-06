@@ -44,8 +44,8 @@ class RagCLI:
         Returns:
             A concise error message suitable for display to the user.
         """
-        # 当前调用中 error_path 通常等于 fallback_path；仍优先保留
-        # 文件系统异常自带的 filename，异常无路径时才使用 fallback。
+        # Prefer the filename the exception carries; fall back to the
+        # caller-supplied path only when the exception has none.
         error_path = getattr(error, "filename", None) or fallback_path
 
         if isinstance(error, FileNotFoundError):
@@ -77,18 +77,19 @@ class RagCLI:
     def _save_json(
         model: BaseModel, directory_path: str, file_name: str
     ) -> Path:
-        """把 pydantic 模型写入 ``<directory_path>/<file_name>``。
+        """Write a pydantic model to ``<directory_path>/<file_name>``.
 
         Args:
-            model: 需要序列化的 pydantic 模型。
-            directory_path: 输出目录；不存在时会自动创建。
-            file_name: 输出文件名。
+            model: Pydantic model to serialize.
+            directory_path: Output directory; created if missing.
+            file_name: Output file name.
 
         Returns:
-            实际写入的文件路径。
+            Path the file was written to.
 
         Raises:
-            OSError: 如果输出目录或 JSON 文件无法创建或写入。
+            OSError: The output directory or JSON file could not be
+                created or written.
         """
         RagCLI._validate_output_directory(directory_path)
         output_directory = Path(directory_path)
@@ -119,7 +120,7 @@ class RagCLI:
         """
         try:
             dataset = load_dataset(file_path)
-        # 所有数据集命令使用同一组异常类型和同一种消息格式。
+        # Every dataset command shares this exception set and message format.
         except (
             FileNotFoundError,
             IsADirectoryError,
@@ -152,7 +153,7 @@ class RagCLI:
         try:
             dataset = load_dataset(input_path)
             save_dataset(dataset, output_path)
-        # save_dataset 出错时，异常中的 filename 能正确指向输出路径。
+        # save_dataset's own exceptions already carry the output path.
         except (
             FileNotFoundError,
             IsADirectoryError,
@@ -179,8 +180,8 @@ class RagCLI:
         Returns:
             A message reporting how many chunks were indexed.
         """
-        # 2000 原本只是默认值，调用者仍能传入更大的数字。这里同时把它
-        # 作为 subject 规定的硬上限，避免生成 moulinette 会拒绝的来源。
+        # 2000 is also the subject's hard limit, not just a default the
+        # caller can freely raise, to avoid sources the moulinette rejects.
         if not 1 <= max_chunk_size <= DEFAULT_MAX_CHUNK_SIZE:
             return (
                 "Error: max_chunk_size must be between 1 and "
@@ -188,13 +189,14 @@ class RagCLI:
             )
 
         try:
-            # 在读取整个 corpus 之前先拒绝错误的输出路径，避免耗时建完
-            # 索引后才因为 index_directory 实际是文件而崩溃。
+            # Reject a bad output path before reading the whole corpus,
+            # instead of failing after an expensive build because
+            # index_directory turned out to be a file.
             self._validate_output_directory(index_directory)
             bm25_index = BM25Index.build_index(raw_directory, max_chunk_size)
             BM25Index.save_index(bm25_index, index_directory)
-        # find_document_paths/load_document 已经给出可直接展示的错误信息，
-        # 不需要像 dataset 命令那样再做一次格式化。
+        # find_document_paths/load_document already produce a displayable
+        # message; no extra formatting needed like the dataset commands.
         except (OSError, ValueError) as error:
             return f"Error: {error}"
 
@@ -232,8 +234,8 @@ class RagCLI:
             return f"Error: {error}"
 
         chunks = bm25_index.search(query, k)
-        # 单条 search 与 search_dataset 使用相同的 Pydantic JSON 结构；
-        # 不写硬编码文件，只把一条结果序列化到 stdout。
+        # Single-query search shares the same pydantic JSON shape as
+        # search_dataset; no file is written, just one result to stdout.
         question = UnansweredQuestion(question=query)
         result = MinimalSearchResults(
             question_id=question.question_id,
@@ -275,8 +277,9 @@ class RagCLI:
         if k < 0:
             return "Error: k must not be negative."
 
-        # save_directory 是“目录”参数；如果它已经是普通文件，应在加载
-        # 索引和批量搜索之前返回受控错误，而不是让 mkdir 抛 traceback。
+        # If save_directory already exists as a plain file, fail with a
+        # controlled error before loading the index and searching,
+        # instead of letting mkdir() raise a traceback later.
         try:
             self._validate_output_directory(save_directory)
         except OSError as error:
@@ -367,9 +370,10 @@ class RagCLI:
             return f"Error: {error}"
 
         chunks = bm25_index.search(query, k)
-        # Hugging Face 会在模型名称错误、网络不可用且权重未缓存、权重
-        # 损坏或内存不足时抛 OSError/ValueError/RuntimeError。它们属于
-        # 第三方模型边界的可预期失败，应转换成 CLI 错误而不是 traceback。
+        # Hugging Face raises OSError/ValueError/RuntimeError for a bad
+        # model name, no network with uncached weights, corrupt weights,
+        # or out-of-memory. These are expected failures at the third-party
+        # model boundary, converted to a CLI error instead of a traceback.
         try:
             generator = AnswerGenerator(model_name)
         except (OSError, RuntimeError, ValueError) as error:
@@ -382,7 +386,8 @@ class RagCLI:
             )
         except (OSError, RuntimeError, ValueError) as error:
             return f"Error: answer generation failed: {error}"
-        # 单条 answer 同样包装成规定的 JSON，并保留生成答案所依据的来源。
+        # Single-query answer wraps into the same JSON shape, keeping the
+        # sources the answer was grounded in.
         question = UnansweredQuestion(question=query)
         result = MinimalAnswer(
             question_id=question.question_id,
@@ -421,8 +426,9 @@ class RagCLI:
             A message confirming where the results were saved, or a
             message describing why the command could not run.
         """
-        # 必须在加载 Qwen 之前检查输出参数；否则一个明显错误的目录会让
-        # 用户白白等待模型加载，最后才在写文件时失败。
+        # Check the output path before loading Qwen; otherwise an
+        # obviously bad directory wastes the model-loading wait only to
+        # fail later when writing the file.
         try:
             self._validate_output_directory(save_directory)
         except OSError as error:
@@ -447,27 +453,24 @@ class RagCLI:
         except OSError as error:
             return f"Error: {error}"
 
-        # 模型只加载一次，再重复回答所有问题；加载失败时不创建一个
-        # 看似成功但实际没有答案的输出文件。
+        # Load the model once, reuse it for every question. If loading
+        # fails, don't produce an output file that looks successful but
+        # has no real answers in it.
         try:
             generator = AnswerGenerator(model_name)
         except (OSError, RuntimeError, ValueError) as error:
             return f"Error: model '{model_name}' could not be loaded: {error}"
 
-        # StudentSearchResults = 多个问题的检索结果。
-        # MinimalSearchResults = 一个问题的检索结果。
-        # MinimalSource = 该问题检索到的一个来源。
         progress: Iterable[MinimalSearchResults] = tqdm(
             student_results.search_results,
             desc="Answering",
             unit="question",
         )
 
-        # result = 一个 MinimalSearchResults；source = 一个 MinimalSource。
-        # 每个 source 恢复成 chunk 文本，供模型生成 answer。
-        answers = []
+        answers: list[MinimalAnswer] = []
         for result in progress:
-            # 空问题是已知的退化输入，保留该题并写入明确说明。
+            # A blank question is a known degenerate input: keep the
+            # row, but record an explicit error instead of generating.
             if not result.question.strip():
                 answer_text = "Error: question must not be empty."
             else:
@@ -490,8 +493,8 @@ class RagCLI:
                 )
             )
 
-        # 输出仍是整个数据集，每项由 MinimalSearchResults
-        # 变成带 answer 字段的 MinimalAnswer。
+        # Output is still the whole dataset; each item goes from
+        # MinimalSearchResults to MinimalAnswer with the answer filled in.
         try:
             output_path = self._save_json(
                 StudentSearchResultsAndAnswer(
@@ -543,8 +546,8 @@ class RagCLI:
                 error, student_search_results_path
             )
 
-        # ground_truth 是数据集给出的标准来源，不是程序生成的答案。
-        # retrieved_by_id 是 BM25 对每个问题实际找回的来源。
+        # ground_truth holds the dataset's expected sources; retrieved_by_id
+        # holds what BM25 actually returned for each question.
         ground_truth = {
             question.question_id: question.sources
             for question in dataset.rag_questions
@@ -556,9 +559,10 @@ class RagCLI:
         }
 
         lines = ["Evaluation Results", "=" * 40]
-        # Recall@k：只看排名前 k 的检索结果，但分母仍是全部正确来源。
+        # Recall@k only looks at the top-k retrieved sources; the
+        # denominator is always every correct source for the question.
         for cutoff in (1, 3, 5, 10):
-            recalls = []
+            recalls: list[float] = []
             for question_id, sources in ground_truth.items():
                 if not sources:
                     continue
@@ -596,7 +600,6 @@ def _iou(a_start: int, a_end: int, b_start: int, b_end: int) -> float:
         The intersection length divided by the union length, or zero when
         the ranges do not overlap.
     """
-    # IoU = 两个字符区间的重叠长度 / 合并后的总长度。
     intersection = max(0, min(a_end, b_end) - max(a_start, b_start))
     if intersection <= 0:
         return 0.0
@@ -620,8 +623,9 @@ def _is_match(
         True when both sources use the same path and their character ranges
         meet the IoU threshold; otherwise False.
     """
-    # 官方命中条件是同一文件且 IoU >= 0.05；它只评估检索位置，
-    # 不保证重叠文字包含完整答案，也不评估模型生成的 answer。
+    # The official match rule is same file + IoU >= 0.05; it only scores
+    # retrieval location, not whether the overlap covers a full answer,
+    # and it never evaluates the generated `answer` text.
     if source.file_path != candidate.file_path:
         return False
     return (
@@ -633,20 +637,3 @@ def _is_match(
         )
         >= iou_threshold
     )
-
-
-# =============================================================================
-# CLI 命令速记
-# =============================================================================
-#
-# - index：读取原始文件 -> 分块 -> 建立 BM25 -> 保存 pickle 索引。
-# - search：加载已有索引 -> 搜索单个 query -> 返回 top-k Chunk 的来源范围。
-# - search_dataset：索引只加载一次，逐题搜索，把 Chunk 转成 MinimalSource，
-#   最后写出 moulinette 要求的 StudentSearchResults JSON。
-# - desc="Searching" / desc="Tokenizing" 只是 tqdm 进度条的动作标签，
-#   不参与检索、计分或答案生成。
-# - unit 与每次迭代的对象一致：question / file / chunk，也只影响显示。
-# - copy_dataset 保留当前名称；它在保存副本前会先加载并验证数据集。
-# - 当前调用中 error_path 通常等于 fallback_path，同时兼容异常自带的 filename。
-# - _format_dataset_error 统一数据集异常消息；_save_json 统一创建输出目录、
-#   Pydantic JSON 序列化和 UTF-8 写入。这两项改善一致性，不影响 Recall。

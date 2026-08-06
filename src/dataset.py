@@ -1,4 +1,7 @@
+"""Load and save RAG datasets as validated JSON files."""
+
 from pathlib import Path
+
 from src.models import RagDataset
 
 

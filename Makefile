@@ -1,4 +1,4 @@
-.PHONY: install run debug clean fclean lint lint-strict test
+.PHONY: install run debug clean fclean lint lint-strict
 
 install:
 	uv sync

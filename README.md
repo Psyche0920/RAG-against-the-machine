@@ -87,10 +87,7 @@ show a `moulinette*` file as tracked.
 | 3. Search a dataset | `uv run python -m src search_dataset --dataset_path data/datasets/UnansweredQuestions/dataset_docs_public.json --save_directory data/output/search_results/UnansweredQuestions --k 10` |
 | 4. Score with the moulinette | `./moulinette evaluate_student_search_results data/output/search_results/UnansweredQuestions/dataset_docs_public.json data/datasets/AnsweredQuestions/dataset_docs_public.json --k 10 --max_context_length 2000` |
 
-Repeat step 3–4 for the `dataset_code_public.json` dataset. This project's
-own `evaluate` command (step 3 above's output, checked with `src evaluate`)
-mirrors the moulinette's recall@k math for fast local iteration, but the
-**moulinette's own output is always the authoritative score** — `src`
+**Moulinette's own output is always the authoritative score** — `src`
 never imports or calls it.
 
 ## Resources
@@ -116,14 +113,7 @@ never imports or calls it.
 
 **AI usage:**
 
-| Task | How AI helped |
-|---|---|
-| Design review | chunking strategy, BM25 `k1`/`b` tuning, recall@k / IoU logic |
-| Debugging | found + fixed a runtime crash (missing `torch` dependency) and a disk-space issue (GPU wheel) |
-| Drafting | docstrings/comments and this README — reviewed and verified, not copied blind |
-
-Every AI-suggested change was checked with `flake8`, `mypy --strict`, and a
-real run before being kept.
+AI was used for code generation assistance, debugging, and documentation throughout the project.
 
 ## System architecture
 

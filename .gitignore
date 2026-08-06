@@ -33,8 +33,9 @@ data/output/*
 *.safetensors
 *.bin
 
-# Reference material handed out for the project (subject PDF, moulinette
-# binaries, the raw vLLM zip/extracted copy, sample datasets). All of this
-# is downloadable from the school intranet; the subject explicitly says not
-# to commit large data files, model weights, or generated outputs.
-/materials/
+# The moulinette grading binary, wherever it's unzipped to run it locally
+# (project root, per the README's Moulinette instructions). Never ours to
+# ship — same "downloadable from intra, don't commit it" rule as above.
+/moulinette
+/moulinette-ubuntu
+/moulinette-fedora
