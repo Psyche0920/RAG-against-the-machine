@@ -223,6 +223,8 @@ class RagCLI:
         """
         if not query.strip():
             return "Error: query must not be empty."
+        if k < 0:
+            return "Error: k must not be negative."
 
         try:
             bm25_index = BM25Index.load_index(index_directory)
@@ -270,6 +272,9 @@ class RagCLI:
             A message confirming where the results were saved, or a
             message describing why the command could not run.
         """
+        if k < 0:
+            return "Error: k must not be negative."
+
         # save_directory 是“目录”参数；如果它已经是普通文件，应在加载
         # 索引和批量搜索之前返回受控错误，而不是让 mkdir 抛 traceback。
         try:
@@ -353,6 +358,8 @@ class RagCLI:
         # with a clear message instead of loading the model just to crash.
         if not query.strip():
             return "Error: query must not be empty."
+        if k < 0:
+            return "Error: k must not be negative."
 
         try:
             bm25_index = BM25Index.load_index(index_directory)

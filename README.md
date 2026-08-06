@@ -280,7 +280,7 @@ Each command should finish without an unhandled Python traceback:
 |---|---|---|
 | Empty query | `uv run python -m src search "" --k 5` | `Error: query must not be empty.` |
 | `k=0` | `uv run python -m src search "query" --k 0` | valid JSON with no retrieved sources |
-| Negative `k` | `uv run python -m src search "query" --k -3` | valid JSON with no retrieved sources |
+| Negative `k` | `uv run python -m src search "query" --k -3` | `Error: k must not be negative.` |
 | Unknown query | `uv run python -m src search "zzzz_nonexistent_token" --k 5` | valid JSON with no arbitrary results |
 | Missing dataset | `uv run python -m src search_dataset --dataset_path /tmp/does-not-exist.json --save_directory /tmp/rag-missing-check --k 10` | concise file-not-found error |
 | Dataset path is a directory | `uv run python -m src search_dataset --dataset_path data/datasets --save_directory /tmp/rag-directory-check --k 10` | concise expected-file error |
