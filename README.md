@@ -72,7 +72,7 @@ This only limits the local smoke test; the original 100-question search-results
 file remains unchanged.
 
 `make install` / `make run` / `make debug` / `make clean` / `make lint` /
-`make lint-strict` / `make test` also available.
+`make lint-strict` also available.
 
 ### Moulinette (official grading — do NOT commit it)
 
@@ -260,22 +260,9 @@ Recall@5: 0.860 (86.0%)
 Recall@10: 0.900 (90.0%)
 ```
 
-## Testing
+## Edge-case checks
 
-### Unit tests
-
-```bash
-make test    # runs tests/test_smoke.py — tokenizer, chunk offsets,
-              # read_source_text bounds, IoU/recall matching
-```
-
-Not graded (subject: test programs are for your own verification), but
-kept fast and dependency-light so it always runs in a couple of seconds.
-
-### Edge cases — every row below was actually run against this code,
-### not assumed. **Every command must exit without a Python traceback.**
-
-Create the deliberately invalid fixtures used below:
+Create the deliberately invalid input files used below:
 
 ```bash
 printf '{"rag_questions": [' > /tmp/bad_dataset.json
@@ -287,22 +274,23 @@ printf 'not a pickle index' > /tmp/rag-stale-index/bm25_index.pkl
 printf '{"search_results":[{"question_id":"blank-question","question":"","retrieved_sources":[]}],"k":3}\n' > /tmp/blank_question_results.json
 ```
 
-| # | Case | Command | Expected | Verified result |
-|---|---|---|---|---|
-| 1 | Empty query | `uv run python -m src search "" --k 5` | no crash | ✅ `Error: query must not be empty.` |
-| 2 | `k=0` | `uv run python -m src search "query" --k 0` | no crash | ✅ valid JSON with `retrieved_sources: []` |
-| 3 | Negative `k` | `uv run python -m src search "query" --k -3` | no crash | ✅ valid JSON with `retrieved_sources: []` |
-| 4 | Query has no searchable match | `uv run python -m src search "zzzz_nonexistent_token" --k 5` | no arbitrary results | ✅ valid JSON with `retrieved_sources: []` |
-| 5 | Dataset file missing | `uv run python -m src search_dataset --dataset_path /tmp/does-not-exist.json --save_directory /tmp/rag-missing-test --k 10` | no crash | ✅ `Error: file not found: ...` |
-| 6 | Path is a directory, not a file | `uv run python -m src search_dataset --dataset_path data/datasets --save_directory /tmp/rag-directory-test --k 10` | no crash | ✅ `Error: expected a file, got directory: ...` |
-| 7 | Malformed JSON | `uv run python -m src search_dataset --dataset_path /tmp/bad_dataset.json --save_directory /tmp/rag-bad-json-test --k 10` | no crash | ✅ `Error: invalid RAG dataset: ...` |
-| 8 | Valid JSON, missing required fields | `uv run python -m src search_dataset --dataset_path /tmp/partial_dataset.json --save_directory /tmp/rag-partial-test --k 10` | no crash | ✅ pydantic validation error, formatted |
-| 9 | Non-UTF-8 file | `uv run python -m src search_dataset --dataset_path /tmp/non_utf8_dataset.json --save_directory /tmp/rag-encoding-test --k 10` | no crash | ✅ `Error: dataset is not valid UTF-8: ...` |
-| 10 | Corpus directory missing | `uv run python -m src index --raw_directory /tmp/does-not-exist-corpus --index_directory /tmp/rag-index-test` | no crash | ✅ `Error: Corpus directory does not exist: ...` |
-| 11 | `search` before `index` was ever run | `uv run python -m src search "test" --index_directory /tmp/does-not-exist-index` | no crash | ✅ `Error: No index found at ...; run the index command first.` |
-| 12 | Stale/incompatible index file | `uv run python -m src search "test" --index_directory /tmp/rag-stale-index` | no crash | ✅ `Error: Index at ... could not be loaded (it may be stale or corrupted...); run the index command again.` — **found and fixed during this review**, see Challenges below |
-| 13 | Empty query to `answer` | `uv run python -m src answer "" --k 3` | no crash | ✅ `Error: query must not be empty.` — **found and fixed during this review** |
-| 14 | Zero chunks retrieved, non-empty query | `uv run python -m src answer "the is of a" --k 3` | no crash | ✅ model answers from `"No sources were retrieved."` |
-| 15 | `answer_dataset`, input file missing | `uv run python -m src answer_dataset --student_search_results_path /tmp/does-not-exist.json --save_directory /tmp/rag-answer-test` | no crash | ✅ `Error: file not found: ...` |
-| 16 | `answer_dataset`, one blank question in the batch | `uv run python -m src answer_dataset --student_search_results_path /tmp/blank_question_results.json --save_directory /tmp/rag-blank-answer-test` | no crash, batch still completes | ✅ that row gets `"Error: question must not be empty."` as its answer, rest of the batch still runs — **found and fixed during this review** |
-| 17 | `evaluate` with an empty search-results file | `uv run python -m src evaluate --student_search_results_path /tmp/empty_search_results.json --dataset_path data/datasets/AnsweredQuestions/dataset_docs_public.json` | no crash | ✅ reports `Recall@k: 0.000 (0.0%)` for all k |
+Each command should finish without an unhandled Python traceback:
+
+| Case | Command | Expected result |
+|---|---|---|
+| Empty query | `uv run python -m src search "" --k 5` | `Error: query must not be empty.` |
+| `k=0` | `uv run python -m src search "query" --k 0` | valid JSON with no retrieved sources |
+| Negative `k` | `uv run python -m src search "query" --k -3` | valid JSON with no retrieved sources |
+| Unknown query | `uv run python -m src search "zzzz_nonexistent_token" --k 5` | valid JSON with no arbitrary results |
+| Missing dataset | `uv run python -m src search_dataset --dataset_path /tmp/does-not-exist.json --save_directory /tmp/rag-missing-check --k 10` | concise file-not-found error |
+| Dataset path is a directory | `uv run python -m src search_dataset --dataset_path data/datasets --save_directory /tmp/rag-directory-check --k 10` | concise expected-file error |
+| Malformed JSON | `uv run python -m src search_dataset --dataset_path /tmp/bad_dataset.json --save_directory /tmp/rag-bad-json-check --k 10` | dataset validation error |
+| Missing JSON fields | `uv run python -m src search_dataset --dataset_path /tmp/partial_dataset.json --save_directory /tmp/rag-partial-check --k 10` | Pydantic validation error |
+| Non-UTF-8 dataset | `uv run python -m src search_dataset --dataset_path /tmp/non_utf8_dataset.json --save_directory /tmp/rag-encoding-check --k 10` | UTF-8 error |
+| Missing corpus | `uv run python -m src index --raw_directory /tmp/does-not-exist-corpus --index_directory /tmp/rag-index-check` | concise corpus-not-found error |
+| Missing index | `uv run python -m src search "test" --index_directory /tmp/does-not-exist-index` | error instructing the user to build the index |
+| Corrupt index | `uv run python -m src search "test" --index_directory /tmp/rag-stale-index` | error instructing the user to rebuild the index |
+| Empty answer query | `uv run python -m src answer "" --k 3` | `Error: query must not be empty.` |
+| Missing answer input | `uv run python -m src answer_dataset --student_search_results_path /tmp/does-not-exist.json --save_directory /tmp/rag-answer-check` | concise file-not-found error |
+| Blank question in a batch | `uv run python -m src answer_dataset --student_search_results_path /tmp/blank_question_results.json --save_directory /tmp/rag-blank-answer-check` | that row receives an error answer without aborting the batch |
+| Empty evaluation input | `uv run python -m src evaluate --student_search_results_path /tmp/empty_search_results.json --dataset_path data/datasets/AnsweredQuestions/dataset_docs_public.json` | zero recall at every reported cutoff |
