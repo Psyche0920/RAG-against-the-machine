@@ -19,7 +19,7 @@ about the [vLLM] codebase.
 ### Install
 
 ```bash
-uv sync
+make install
 ```
 
 ### If there is not enough disk space
@@ -71,8 +71,8 @@ uv run python -m src answer_dataset \
 This only limits the local smoke test; the original 100-question search-results
 file remains unchanged.
 
-`make run` / `make debug` / `make clean` / `make lint` / `make lint-strict` /
-`make test` also available.
+`make install` / `make run` / `make debug` / `make clean` / `make lint` /
+`make lint-strict` / `make test` also available.
 
 ### Moulinette (official grading — do NOT commit it)
 
@@ -208,11 +208,9 @@ throughput requirement (that's retrieval-only), but budget time for it.
 | Ranking code and documentation fairly | tuned BM25 `k1`/`b` against measured recall@5 |
 | Grounding answers in retrieved code | built prompts from top-k chunks and instructed Qwen not to guess beyond them |
 | Running generation on limited hardware | used Qwen3-0.6B, bounded token lengths, and CPU-only PyTorch |
-| `make lint`/`lint-strict` crashed when run as `flake8 .`/`mypy .` (subject's literal command) | they walked into `.venv/` and the vendored vLLM corpus; added `.flake8` and `[tool.mypy] exclude` so `.` only lints/type-checks this project's own code |
-| `make test` crashed | `pytest` collected vLLM's own broken test suite from `data/raw/`; scoped it to `testpaths = ["tests"]` and added `pythonpath = ["."]` so `from src...` imports resolve |
-| `search`/`answer` crashed on a stale index after refactoring `src/models/` → `src/models.py` | `pickle.load()` raised an uncaught `ModuleNotFoundError`; `load_index()` now catches unpickling failures and reports a clear "rebuild the index" error instead |
-| `answer ""` crashed with an uncaught `ValueError` | added an explicit empty-query check before loading the model |
-| One blank question in an `answer_dataset` batch would crash the whole run | that row now gets an error string as its answer instead of aborting every other question |
+| Keeping project checks focused | configured lint, type checking, and tests to exclude the virtual environment, generated data, and the vendored vLLM corpus |
+| Handling invalid input and I/O failures | validated CLI arguments and converted missing files, malformed JSON, invalid paths, and empty queries into concise errors instead of tracebacks |
+| Handling external and persisted-state failures | caught stale index, model-loading, and generation errors and returned actionable recovery messages |
 
 ## Example usage
 
@@ -308,7 +306,3 @@ printf '{"search_results":[{"question_id":"blank-question","question":"","retrie
 | 15 | `answer_dataset`, input file missing | `uv run python -m src answer_dataset --student_search_results_path /tmp/does-not-exist.json --save_directory /tmp/rag-answer-test` | no crash | ✅ `Error: file not found: ...` |
 | 16 | `answer_dataset`, one blank question in the batch | `uv run python -m src answer_dataset --student_search_results_path /tmp/blank_question_results.json --save_directory /tmp/rag-blank-answer-test` | no crash, batch still completes | ✅ that row gets `"Error: question must not be empty."` as its answer, rest of the batch still runs — **found and fixed during this review** |
 | 17 | `evaluate` with an empty search-results file | `uv run python -m src evaluate --student_search_results_path /tmp/empty_search_results.json --dataset_path data/datasets/AnsweredQuestions/dataset_docs_public.json` | no crash | ✅ reports `Recall@k: 0.000 (0.0%)` for all k |
-
-Three real crashes (#12, #13, #16) were found by actually running these
-cases, not by inspection, and are now fixed and re-verified — see
-**Challenges faced** below.
