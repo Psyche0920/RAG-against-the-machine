@@ -98,6 +98,11 @@ def test_single_search_returns_structured_json(tmp_path: Path) -> None:
     ]
 
 
+def test_single_search_rejects_empty_query() -> None:
+    """An empty search query returns a controlled CLI error."""
+    assert RagCLI().search("") == "Error: query must not be empty."
+
+
 # 2000 不只是默认值，也是 subject 的硬上限；CLI 必须在读取 corpus 前
 # 拒绝 0、负数和大于 2000 的值，避免崩溃或生成无效来源。
 def test_index_rejects_chunk_sizes_outside_subject_limit() -> None:

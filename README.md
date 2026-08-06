@@ -5,7 +5,7 @@
 ## Description
 
 A **RAG** (Retrieval-Augmented Generation) system that answers questions
-about the [vLLM](https://github.com/vllm-project/vllm) 0.10.1 codebase.
+about the [vLLM] codebase.
 
 | Stage | What it does |
 |---|---|
@@ -22,40 +22,54 @@ about the [vLLM](https://github.com/vllm-project/vllm) 0.10.1 codebase.
 uv sync
 ```
 
-### Disk space
+### If there is not enough disk space
 
-| Component | Size |
-|---|---|
-| `.venv` (incl. CPU-only PyTorch) | ~1.0 GB |
-| `data/raw/` (vLLM corpus) | ~40 MB |
-| `data/processed/` (BM25 index) | ~40 MB |
-| `Qwen/Qwen3-0.6B` weights | ~1.5 GB |
-| **Total** | **~2.6 GB** — keep 4–5 GB free |
-
-**2 things that prevent disk errors** (already set in `pyproject.toml`):
-
-- `torch` → pinned to the **CPU-only wheel index**. Default `torch` pulls
-  the full CUDA/cuDNN/NCCL stack (extra GBs), never used here.
-- **Small `/home`, big scratch disk** (e.g. 42 machines: tiny `/home`,
-  huge `/goinfre`) → point the model cache at the big one *before* the
-  first `answer` run:
-  ```bash
-  export HF_HOME=/goinfre/$USER/huggingface
-  ```
+```bash
+mkdir -p /goinfre/$USER/huggingface
+export HF_HOME=/goinfre/$USER/huggingface
+```
 
 ### Run
 
 ```bash
 uv run python -m src index --max_chunk_size 2000
-uv run python -m src search "<question>" -k 5
-uv run python -m src search_dataset --dataset_path <path> --save_directory <dir> -k 10
-uv run python -m src answer "<question>" -k 5
-uv run python -m src answer_dataset --student_search_results_path <path> --save_directory <dir>
-uv run python -m src evaluate --student_search_results_path <path> --dataset_path <path>
+uv run python -m src search \
+  "What HTTP endpoint is used to dynamically load a LoRA adapter in vLLM?" \
+  --k 5
+uv run python -m src search_dataset \
+  --dataset_path data/datasets/UnansweredQuestions/dataset_docs_public.json \
+  --save_directory data/output/search_results/UnansweredQuestions \
+  --k 10
+uv run python -m src answer \
+  "What HTTP endpoint is used to dynamically load a LoRA adapter in vLLM?" \
+  --k 5
+uv run python -m src answer_dataset \
+  --student_search_results_path data/output/search_results/UnansweredQuestions/dataset_docs_public.json \
+  --save_directory data/output/search_results_and_answer/UnansweredQuestions
+uv run python -m src evaluate \
+  --student_search_results_path data/output/search_results/UnansweredQuestions/dataset_docs_public.json \
+  --dataset_path data/datasets/AnsweredQuestions/dataset_docs_public.json
 ```
 
 Single-query `search` and `answer` print structured JSON to stdout. Batch
 commands write the same Pydantic-based structures to the requested directory.
+
+Generating answers for a full dataset can be slow on CPU. For a quick
+three-question smoke test, create a smaller search-results file with `jq` and
+pass it to `answer_dataset`:
+
+```bash
+jq '.search_results = .search_results[:3]' \
+  data/output/search_results/UnansweredQuestions/dataset_docs_public.json \
+  > /tmp/search_results_3.json
+
+uv run python -m src answer_dataset \
+  --student_search_results_path /tmp/search_results_3.json \
+  --save_directory data/output/search_results_and_answer/Test
+```
+
+This only limits the local smoke test; the original 100-question search-results
+file remains unchanged.
 
 `make run` / `make debug` / `make clean` / `make lint` / `make lint-strict` /
 `make test` also available.
@@ -147,12 +161,15 @@ data/raw/  →  documents.py   →  chunking.py    →  index.py (BM25Okapi)
 ## Retrieval method
 
 **BM25** (`rank_bm25.BM25Okapi`) — one of the two lexical methods required.
+It was chosen over TF-IDF because its term-frequency saturation and document-length
+normalization rank unevenly sized code and documentation chunks more fairly, while
+remaining fast and explainable on CPU.
 
 | Piece | Choice | Why |
 |---|---|---|
 | Tokenizer | lowercase + `[A-Za-z0-9_]+` + stopword removal | same rule for query and corpus, required for BM25 matching |
 | Indexed text | `tokenize(file_path) + tokenize(chunk.text)` | questions often name a file/module |
-| `k1` | **1.0** (default 1.5) | slows token-frequency saturation |
+| `k1` | **1.0** (default 1.5) | makes term frequency saturate sooner, so repeated tokens add less score |
 | `b` | **0.4** (default 0.75) | less penalty for long code chunks |
 | Ranking | `bm25.get_scores()`, sort desc, take top-k | — |
 
@@ -207,7 +224,7 @@ $ uv run python -m src search \
     "What HTTP endpoint dynamically loads a LoRA adapter?" -k 1
 {
   "search_results": [{
-    "question_id": "<generated UUID>",
+    "question_id": "generated UUID",
     "question": "What HTTP endpoint dynamically loads a LoRA adapter?",
     "retrieved_sources": [{
       "file_path": "data/raw/vllm-0.10.1/docs/features/lora.md",
@@ -222,7 +239,7 @@ $ uv run python -m src answer \
     "What HTTP endpoint dynamically loads a LoRA adapter?" -k 1
 {
   "search_results": [{
-    "question_id": "<generated UUID>",
+    "question_id": "generated UUID",
     "question": "What HTTP endpoint dynamically loads a LoRA adapter?",
     "retrieved_sources": [{
       "file_path": "data/raw/vllm-0.10.1/docs/features/lora.md",
@@ -235,7 +252,7 @@ $ uv run python -m src answer \
 }
 
 $ uv run python -m src evaluate \
-    --student_search_results_path data/output/search_results/AnsweredQuestions/dataset_docs_public.json \
+    --student_search_results_path data/output/search_results/UnansweredQuestions/dataset_docs_public.json \
     --dataset_path data/datasets/AnsweredQuestions/dataset_docs_public.json
 Evaluation Results
 ========================================
@@ -260,25 +277,37 @@ kept fast and dependency-light so it always runs in a couple of seconds.
 ### Edge cases — every row below was actually run against this code,
 ### not assumed. **Every command must exit without a Python traceback.**
 
+Create the deliberately invalid fixtures used below:
+
+```bash
+printf '{"rag_questions": [' > /tmp/bad_dataset.json
+printf '{"rag_questions": [{}]}\n' > /tmp/partial_dataset.json
+printf '\xff\xfe' > /tmp/non_utf8_dataset.json
+printf '{"search_results": [], "k": 10}\n' > /tmp/empty_search_results.json
+mkdir -p /tmp/rag-stale-index
+printf 'not a pickle index' > /tmp/rag-stale-index/bm25_index.pkl
+printf '{"search_results":[{"question_id":"blank-question","question":"","retrieved_sources":[]}],"k":3}\n' > /tmp/blank_question_results.json
+```
+
 | # | Case | Command | Expected | Verified result |
 |---|---|---|---|---|
-| 1 | Empty query | `search "" -k 5` | no crash | ✅ valid JSON with `retrieved_sources: []` |
-| 2 | `k=0` | `search "query" -k 0` | no crash | ✅ valid JSON with `retrieved_sources: []` |
-| 3 | Negative `k` | `search "query" -k -3` | no crash | ✅ valid JSON with `retrieved_sources: []` |
-| 4 | Query has no searchable match | `search "zzzz_nonexistent_token" -k 5` | no arbitrary results | ✅ valid JSON with `retrieved_sources: []` |
-| 5 | Dataset file missing | `search_dataset --dataset_path <missing>` | no crash | ✅ `Error: file not found: ...` |
-| 6 | Path is a directory, not a file | `search_dataset --dataset_path data/datasets` | no crash | ✅ `Error: expected a file, got directory: ...` |
-| 7 | Malformed JSON | `search_dataset --dataset_path <bad.json>` | no crash | ✅ `Error: invalid RAG dataset: ...` |
-| 8 | Valid JSON, missing required fields | `search_dataset --dataset_path <partial.json>` | no crash | ✅ pydantic validation error, formatted |
-| 9 | Non-UTF-8 file | `search_dataset --dataset_path <binary file>` | no crash | ✅ `Error: dataset is not valid UTF-8: ...` |
-| 10 | Corpus directory missing | `index --raw_directory <missing>` | no crash | ✅ `Error: Corpus directory does not exist: ...` |
-| 11 | `search`/`answer` before `index` was ever run | `search "test"` (no `data/processed/`) | no crash | ✅ `Error: No index found at ...; run the index command first.` |
-| 12 | Stale/incompatible index file (e.g. after refactoring `src`) | `search "test"` | no crash | ✅ `Error: Index at ... could not be loaded (it may be stale or corrupted...); run the index command again.` — **found and fixed during this review**, see Challenges below |
-| 13 | Empty query to `answer` | `answer "" -k 3` | no crash | ✅ `Error: query must not be empty.` — **found and fixed during this review** |
-| 14 | Zero chunks retrieved, non-empty query | `answer "the is of a" -k 3` | no crash | ✅ model answers from `"No sources were retrieved."` |
-| 15 | `answer_dataset`, input file missing | `answer_dataset --student_search_results_path <missing>` | no crash | ✅ `Error: file not found: ...` |
-| 16 | `answer_dataset`, one blank question in the batch | (dataset with an empty `question`) | no crash, batch still completes | ✅ that row gets `"Error: question must not be empty."` as its answer, rest of the batch still runs — **found and fixed during this review** |
-| 17 | `evaluate` with an empty search-results file | `evaluate --student_search_results_path <empty>` | no crash | ✅ reports `Recall@k: 0.000 (0.0%)` for all k |
+| 1 | Empty query | `uv run python -m src search "" --k 5` | no crash | ✅ `Error: query must not be empty.` |
+| 2 | `k=0` | `uv run python -m src search "query" --k 0` | no crash | ✅ valid JSON with `retrieved_sources: []` |
+| 3 | Negative `k` | `uv run python -m src search "query" --k -3` | no crash | ✅ valid JSON with `retrieved_sources: []` |
+| 4 | Query has no searchable match | `uv run python -m src search "zzzz_nonexistent_token" --k 5` | no arbitrary results | ✅ valid JSON with `retrieved_sources: []` |
+| 5 | Dataset file missing | `uv run python -m src search_dataset --dataset_path /tmp/does-not-exist.json --save_directory /tmp/rag-missing-test --k 10` | no crash | ✅ `Error: file not found: ...` |
+| 6 | Path is a directory, not a file | `uv run python -m src search_dataset --dataset_path data/datasets --save_directory /tmp/rag-directory-test --k 10` | no crash | ✅ `Error: expected a file, got directory: ...` |
+| 7 | Malformed JSON | `uv run python -m src search_dataset --dataset_path /tmp/bad_dataset.json --save_directory /tmp/rag-bad-json-test --k 10` | no crash | ✅ `Error: invalid RAG dataset: ...` |
+| 8 | Valid JSON, missing required fields | `uv run python -m src search_dataset --dataset_path /tmp/partial_dataset.json --save_directory /tmp/rag-partial-test --k 10` | no crash | ✅ pydantic validation error, formatted |
+| 9 | Non-UTF-8 file | `uv run python -m src search_dataset --dataset_path /tmp/non_utf8_dataset.json --save_directory /tmp/rag-encoding-test --k 10` | no crash | ✅ `Error: dataset is not valid UTF-8: ...` |
+| 10 | Corpus directory missing | `uv run python -m src index --raw_directory /tmp/does-not-exist-corpus --index_directory /tmp/rag-index-test` | no crash | ✅ `Error: Corpus directory does not exist: ...` |
+| 11 | `search` before `index` was ever run | `uv run python -m src search "test" --index_directory /tmp/does-not-exist-index` | no crash | ✅ `Error: No index found at ...; run the index command first.` |
+| 12 | Stale/incompatible index file | `uv run python -m src search "test" --index_directory /tmp/rag-stale-index` | no crash | ✅ `Error: Index at ... could not be loaded (it may be stale or corrupted...); run the index command again.` — **found and fixed during this review**, see Challenges below |
+| 13 | Empty query to `answer` | `uv run python -m src answer "" --k 3` | no crash | ✅ `Error: query must not be empty.` — **found and fixed during this review** |
+| 14 | Zero chunks retrieved, non-empty query | `uv run python -m src answer "the is of a" --k 3` | no crash | ✅ model answers from `"No sources were retrieved."` |
+| 15 | `answer_dataset`, input file missing | `uv run python -m src answer_dataset --student_search_results_path /tmp/does-not-exist.json --save_directory /tmp/rag-answer-test` | no crash | ✅ `Error: file not found: ...` |
+| 16 | `answer_dataset`, one blank question in the batch | `uv run python -m src answer_dataset --student_search_results_path /tmp/blank_question_results.json --save_directory /tmp/rag-blank-answer-test` | no crash, batch still completes | ✅ that row gets `"Error: question must not be empty."` as its answer, rest of the batch still runs — **found and fixed during this review** |
+| 17 | `evaluate` with an empty search-results file | `uv run python -m src evaluate --student_search_results_path /tmp/empty_search_results.json --dataset_path data/datasets/AnsweredQuestions/dataset_docs_public.json` | no crash | ✅ reports `Recall@k: 0.000 (0.0%)` for all k |
 
 Three real crashes (#12, #13, #16) were found by actually running these
 cases, not by inspection, and are now fixed and re-verified — see

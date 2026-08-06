@@ -192,7 +192,6 @@ class BM25Index:
         #
         # range(len(self.chunks)) 首先产生下标 [0, 1, 2]。
         # key=lambda index: scores[index] 告诉 sorted：
-        #Qwen 权重未完整下载，离线运行 answer 会在 [src/cli.py (line 327)](/home/wehan/RAG/Github/src/cli.py:327) 出现未捕获 traceback，需要增加模型加载异常处理。
         #     下标 0 的排序值是 scores[0] == 0.2
         #     下标 1 的排序值是 scores[1] == 3.5
         #     下标 2 的排序值是 scores[2] == 1.1
@@ -212,28 +211,6 @@ class BM25Index:
         # [chunk_b, chunk_c]。
         return [self.chunks[index] for index in ranked_indices[:k]]
 
-    # 这些函数保留在你原来的 BM25Index 类中。普通实例
-    # 方法会自动收到调用它的对象 self：
-    #
-    #     index.search("query", 5)
-    #
-    # Python 实际会像这样传参：
-    #
-    #     BM25Index.search(index, "query", 5)
-    #                        ^^^^^
-    #                        这就是 self
-    #
-    # 但 build_index() 建立新索引时还没有现成 index 对象，它只需要
-    # raw_directory 等参数，不读取 self.chunks 或 self.bm25。save_index()
-    # 和 load_index() 也不依赖“调用这个方法的 self”。
-    #
-    # @staticmethod 告诉 Python：这个函数只是放在类的命名空间中，
-    # 调用时不要自动插入 self。因此可以写：
-    #
-    #     BM25Index.build_index("data/raw")
-    #
-    # 如果没有 @staticmethod，类中方法的第一个参数按惯例应该是
-    # self，mypy 也会报告该方法缺少 self 参数。
     @staticmethod
     def build_index(
         raw_directory: str | Path,
@@ -312,8 +289,9 @@ class BM25Index:
         # b 越大，长 chunk 因为包含更多不相关词而被压低分数的幅度
         # 也越大。本项目的语料里，代码 chunk 和文档 chunk 长度差异
         # 很大，默认的 b=0.75 会让长度差异盖过关键词是否命中；调低到
-        # b=0.4、同时把 k1 从 1.5 降到 1.0（降低词频饱和的速度，避免
-        # 单个高频词主导分数）后，在两个参考数据集上都实测明显提升
+        # b=0.4、同时把 k1 从 1.5 降到 1.0（让词频更快饱和，避免
+        # 重复出现的单个高频词主导分数）后，在两个参考数据集上都
+        # 实测明显提升
         # 了 recall@5，且没有取舍关系（两边同时变好）。
         bm25 = BM25Okapi(tokenized_corpus, k1=1.0, b=0.4)
 

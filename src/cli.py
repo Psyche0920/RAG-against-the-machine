@@ -221,6 +221,9 @@ class RagCLI:
             its ranked sources. ``retrieved_sources`` is empty when nothing
             matches.
         """
+        if not query.strip():
+            return "Error: query must not be empty."
+
         try:
             bm25_index = BM25Index.load_index(index_directory)
         except FileNotFoundError as error:
