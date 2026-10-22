@@ -1,3 +1,17 @@
+<div align="center">
+
+![RAG against the Machine — RETRIEVAL / LOCAL LANGUAGE MODELS](docs/showcase/hero.svg)
+
+**A codebase question-answering pipeline for vLLM, with explicit retrieval and evaluation stages.**
+
+[Explore the documentation](#project-documentation) · [Browse source](https://github.com/Psyche0920/RAG-against-the-machine/tree/main)
+
+</div>
+
+![RAG against the Machine conceptual workflow](docs/showcase/workflow.svg)
+
+<a id="project-documentation"></a>
+
 *This project has been created as part of the 42 curriculum by wehan.*
 
 # RAG against the machine
